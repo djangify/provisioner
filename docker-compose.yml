@@ -1,0 +1,31 @@
+# Docker Compose for Provisioner Development
+# 
+# For production, run provisioner directly with gunicorn (see README)
+# This is useful for local development only
+
+services:
+  provisioner:
+    build: .
+    container_name: provisioner
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./db:/app/db
+      - /var/run/docker.sock:/var/run/docker.sock  # Access to Docker daemon
+      - /srv/customers:/srv/customers               # Customer data
+    ports:
+      - "8080:8000"
+    depends_on:
+      - redis
+  
+  # Optional: Redis for caching (future use)
+  redis:
+    image: redis:7-alpine
+    container_name: provisioner_redis
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+
+volumes:
+  redis_data:
