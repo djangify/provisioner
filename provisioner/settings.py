@@ -20,6 +20,8 @@ ALLOWED_HOSTS = os.environ.get("ALLOWED_HOSTS", "localhost,127.0.0.1").split(","
 
 # Domain settings
 BASE_DOMAIN = os.environ.get("BASE_DOMAIN", "ebuilder.host")
+# Where the signup form lives (djangify.com marketing site)
+DJANGIFY_DOMAIN = os.environ.get("DJANGIFY_DOMAIN", "djangify.com")
 NGINX_CONFIG_DIR = os.environ.get("NGINX_CONFIG_DIR", "/etc/nginx/sites-enabled")
 SERVER_IP = config("SERVER_IP")
 
@@ -110,15 +112,43 @@ REST_FRAMEWORK = {
     ],
 }
 
-# CORS settings (for Stripe webhooks)
+# CORS settings - Allow djangify.com to call provisioner API
 CORS_ALLOW_ALL_ORIGINS = False
-CORS_ALLOWED_ORIGINS = os.environ.get(
-    "CORS_ALLOWED_ORIGINS", "https://api.stripe.com"
-).split(",")
 
-# =============================================================================
+CORS_ALLOWED_ORIGINS = [
+    origin.strip()
+    for origin in os.environ.get(
+        "CORS_ALLOWED_ORIGINS", "https://djangify.com,https://www.djangify.com"
+    ).split(",")
+    if origin.strip()
+]
+
+# Allow credentials (cookies, authorization headers)
+CORS_ALLOW_CREDENTIALS = True
+
+# Allow these headers
+CORS_ALLOW_HEADERS = [
+    "accept",
+    "accept-encoding",
+    "authorization",
+    "content-type",
+    "dnt",
+    "origin",
+    "user-agent",
+    "x-csrftoken",
+    "x-requested-with",
+]
+
+# Allow these methods
+CORS_ALLOW_METHODS = [
+    "GET",
+    "POST",
+    "OPTIONS",
+]
+
+# ====================================================================
 # PROVISIONER SETTINGS
-# =============================================================================
+# ====================================================================
 
 # Stripe
 STRIPE_SECRET_KEY = os.environ.get("STRIPE_SECRET_KEY", "")
