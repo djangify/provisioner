@@ -2,10 +2,11 @@
 Stripe Webhook Handler
 
 Handles Stripe events:
-- checkout.session.completed → Create customer, subscription, and provision instance
-- customer.subscription.updated → Update subscription status
+- checkout.session.completed → Create customer and Start / resume instance
+- customer.subscription.created → Create subscription record
 - customer.subscription.deleted → Cancel and stop instance
 - invoice.payment_failed → Mark subscription as past_due
+- invoice.paid → Reactivate if was past_due
 """
 
 import stripe
@@ -26,10 +27,7 @@ stripe.api_key = settings.STRIPE_SECRET_KEY
 def log_webhook(action, message, details=None):
     """Log webhook events"""
     ProvisioningLog.objects.create(
-        instance=None,
-        action='webhook',
-        message=message,
-        details=details or {}
+        instance=None, action="webhook", message=message, details=details or {}
     )
 
 
@@ -41,197 +39,271 @@ def stripe_webhook(request):
     Stripe sends events here when payments happen.
     """
     payload = request.body
-    sig_header = request.META.get('HTTP_STRIPE_SIGNATURE')
-    
+    sig_header = request.META.get("HTTP_STRIPE_SIGNATURE")
+
     try:
         event = stripe.Webhook.construct_event(
             payload, sig_header, settings.STRIPE_WEBHOOK_SECRET
         )
     except ValueError:
-        log_webhook('webhook', 'Invalid payload')
+        log_webhook("webhook", "Invalid payload")
         return HttpResponse(status=400)
     except stripe.error.SignatureVerificationError:
-        log_webhook('webhook', 'Invalid signature')
+        log_webhook("webhook", "Invalid signature")
         return HttpResponse(status=400)
-    
-    event_type = event['type']
-    
-    log_webhook('webhook', f'Received event: {event_type}', {'event_id': event['id']})
-    
+
+    event_type = event["type"]
+
+    log_webhook("webhook", f"Received event: {event_type}", {"event_id": event["id"]})
+
     # Route to appropriate handler
     handlers = {
-        'checkout.session.completed': handle_checkout_completed,
-        'customer.subscription.updated': handle_subscription_updated,
-        'customer.subscription.deleted': handle_subscription_deleted,
-        'invoice.payment_failed': handle_payment_failed,
-        'invoice.paid': handle_invoice_paid,
+        "checkout.session.completed": handle_checkout_completed,
+        "customer.subscription.created": handle_subscription_created,
+        "customer.subscription.deleted": handle_subscription_deleted,
+        "invoice.payment_failed": handle_payment_failed,
+        "invoice.paid": handle_invoice_paid,
     }
-    
+
     handler = handlers.get(event_type)
-    if handler:
-        try:
-            handler(event['data']['object'])
-        except Exception as e:
-            log_webhook('error', f'Error handling {event_type}: {e}')
-            # Return 200 anyway to prevent Stripe retries for our bugs
-    
+    if not handler:
+        # Unhandled event - log it and return 200 to stop Stripe retrying
+        log_webhook("webhook", f"Unhandled event type: {event_type}")
+        return HttpResponse(status=200)
+
+    try:
+        handler(event["data"]["object"])
+    except Exception as e:
+        log_webhook("error", f"Error handling {event_type}: {e}")
+        # Return 200 anyway to prevent Stripe retries for our bugs
+
     return HttpResponse(status=200)
 
 
 def handle_checkout_completed(session):
     """
-    New customer completed checkout.
-    
-    Expected metadata in checkout session:
-    - subdomain: The subdomain they chose (e.g., 'janes-shop')
-    - site_name: Their store name (e.g., "Jane's Digital Shop")
+    Checkout completed successfully.
+
+    This confirms user intent, NOT payment.
+    We create:
+    - Customer (if needed)
+    - Instance in 'pending' state
+
+    Actual provisioning happens on invoice.paid.
     """
-    email = session.get('customer_email')
-    stripe_customer_id = session.get('customer')
-    stripe_subscription_id = session.get('subscription')
-    metadata = session.get('metadata', {})
-    
-    subdomain = metadata.get('subdomain', '').lower().strip()
-    site_name = metadata.get('site_name', 'My Shop')
-    
-    if not subdomain:
-        log_webhook('error', 'Checkout completed but no subdomain in metadata', {
-            'session_id': session['id']
-        })
-        return
-    
-    # Validate subdomain
     import re
-    if not re.match(r'^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$', subdomain):
-        log_webhook('error', f'Invalid subdomain format: {subdomain}')
+
+    email = session.get("customer_email")
+    stripe_customer_id = session.get("customer")
+    metadata = session.get("metadata", {}) or {}
+
+    subdomain = metadata.get("subdomain", "").lower().strip()
+    site_name = metadata.get("site_name", "My Shop")
+
+    log_webhook(
+        "webhook",
+        "Processing checkout.session.completed",
+        {
+            "session_id": session.get("id"),
+            "stripe_customer_id": stripe_customer_id,
+            "email": email,
+            "subdomain": subdomain,
+        },
+    )
+
+    # Safety checks
+    if not stripe_customer_id:
+        log_webhook("error", "Checkout completed without customer ID", session)
         return
-    
-    # Check subdomain availability
-    if Instance.objects.filter(subdomain=subdomain).exclude(status='deleted').exists():
-        log_webhook('error', f'Subdomain already taken: {subdomain}')
-        # TODO: Handle this edge case - email customer?
+
+    if not subdomain:
+        log_webhook(
+            "error",
+            "Checkout completed but no subdomain provided",
+            {"session_id": session.get("id")},
+        )
         return
-    
-    # Create or get customer
+
+    # Validate subdomain format
+    if not re.match(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$", subdomain):
+        log_webhook("error", f"Invalid subdomain format: {subdomain}")
+        return
+
+    # Ensure subdomain is not already in use
+    if Instance.objects.filter(subdomain=subdomain).exclude(status="deleted").exists():
+        log_webhook("error", f"Subdomain already taken: {subdomain}")
+        return
+
+    # Create or update customer
     customer, created = Customer.objects.get_or_create(
         stripe_customer_id=stripe_customer_id,
-        defaults={'email': email}
+        defaults={"email": email},
     )
-    if not created and customer.email != email:
+
+    if email and customer.email != email:
         customer.email = email
-        customer.save(update_fields=['email'])
-    
-    # Fetch subscription details from Stripe
-    stripe_sub = stripe.Subscription.retrieve(stripe_subscription_id)
-    
-    # Create subscription record
-    subscription = Subscription.objects.create(
-        customer=customer,
-        stripe_subscription_id=stripe_subscription_id,
-        stripe_price_id=stripe_sub['items']['data'][0]['price']['id'],
-        status='active',
-        current_period_start=datetime.fromtimestamp(
-            stripe_sub['current_period_start'], tz=timezone.utc
-        ),
-        current_period_end=datetime.fromtimestamp(
-            stripe_sub['current_period_end'], tz=timezone.utc
-        ),
+        customer.save(update_fields=["email"])
+
+    log_webhook(
+        "webhook",
+        f"Customer {'created' if created else 'found'}",
+        {"customer_id": customer.id, "email": customer.email},
     )
-    
-    # Create instance record
+
+    # Prevent duplicate instances for same customer + subdomain
+    existing_instance = (
+        Instance.objects.filter(customer=customer, subdomain=subdomain)
+        .exclude(status="deleted")
+        .first()
+    )
+
+    if existing_instance:
+        log_webhook(
+            "webhook",
+            "Instance already exists for customer and subdomain",
+            {"instance_id": existing_instance.id},
+        )
+        return
+
+    # Create instance in pending state
     instance = Instance.objects.create(
         customer=customer,
         subdomain=subdomain,
         site_name=site_name,
         admin_email=email,
-        status='pending'
+        status="pending",
     )
-    
-    log_webhook('webhook', f'Created customer and instance for {subdomain}', {
-        'customer_id': customer.id,
-        'instance_id': instance.id
-    })
-    
-    # Provision the Docker container
-    try:
-        manager = DockerManager()
-        manager.provision_instance(instance)
-        
-        # Send welcome email
-        send_welcome_email(instance)
-        
-        log_webhook('webhook', f'Successfully provisioned {subdomain}')
-        
-    except Exception as e:
-        log_webhook('error', f'Failed to provision {subdomain}: {e}')
-        # Instance status will be 'error' from docker_manager
+
+    log_webhook(
+        "webhook",
+        "Instance created in pending state",
+        {
+            "instance_id": instance.id,
+            "subdomain": subdomain,
+        },
+    )
 
 
-def handle_subscription_updated(subscription_data):
+def handle_subscription_created(subscription_data):
     """
-    Subscription status changed (e.g., payment method updated, plan changed).
+    A new subscription was created.
+
+    This event fires once when a subscription is created, with clear intent.
+    We use this to create/update the subscription record with period dates.
     """
-    stripe_subscription_id = subscription_data['id']
-    new_status = subscription_data['status']
-    
+    stripe_subscription_id = subscription_data["id"]
+    stripe_customer_id = subscription_data.get("customer")
+    status = subscription_data.get("status", "active")
+
+    log_webhook(
+        "webhook",
+        f"Processing subscription created: {stripe_subscription_id}",
+        {"customer_id": stripe_customer_id, "status": status},
+    )
+
+    # Find the customer
     try:
-        subscription = Subscription.objects.get(
-            stripe_subscription_id=stripe_subscription_id
+        customer = Customer.objects.get(stripe_customer_id=stripe_customer_id)
+    except Customer.DoesNotExist:
+        log_webhook(
+            "webhook",
+            f"Customer not found for subscription {stripe_subscription_id}",
+            {"stripe_customer_id": stripe_customer_id},
         )
-    except Subscription.DoesNotExist:
-        log_webhook('webhook', f'Subscription not found: {stripe_subscription_id}')
         return
-    
+
+    # Check if subscription already exists
+    existing_sub = Subscription.objects.filter(
+        stripe_subscription_id=stripe_subscription_id
+    ).first()
+
+    if existing_sub:
+        log_webhook(
+            "webhook",
+            f"Subscription already exists: {stripe_subscription_id}",
+        )
+        return
+
+    # Get price ID from subscription items
+    price_id = ""
+    items = subscription_data.get("items", {})
+    if items and items.get("data"):
+        first_item = items["data"][0]
+        price = first_item.get("price", {})
+        price_id = price.get("id", "")
+
+    # Get period dates safely
+    current_period_start = subscription_data.get("current_period_start")
+    current_period_end = subscription_data.get("current_period_end")
+
     # Map Stripe status to our status
     status_map = {
-        'active': 'active',
-        'past_due': 'past_due',
-        'canceled': 'cancelled',
-        'unpaid': 'unpaid',
-        'trialing': 'trialing',
+        "active": "active",
+        "past_due": "past_due",
+        "canceled": "cancelled",
+        "unpaid": "unpaid",
+        "trialing": "trialing",
+        "incomplete": "active",  # Treat incomplete as active for now
+        "incomplete_expired": "cancelled",
     }
-    
-    subscription.status = status_map.get(new_status, new_status)
-    subscription.current_period_start = datetime.fromtimestamp(
-        subscription_data['current_period_start'], tz=timezone.utc
+
+    # Create subscription record
+    subscription = Subscription.objects.create(
+        customer=customer,
+        stripe_subscription_id=stripe_subscription_id,
+        stripe_price_id=price_id,
+        status=status_map.get(status, status),
+        current_period_start=datetime.fromtimestamp(
+            current_period_start, tz=timezone.utc
+        )
+        if current_period_start
+        else None,
+        current_period_end=datetime.fromtimestamp(current_period_end, tz=timezone.utc)
+        if current_period_end
+        else None,
     )
-    subscription.current_period_end = datetime.fromtimestamp(
-        subscription_data['current_period_end'], tz=timezone.utc
+
+    log_webhook(
+        "webhook",
+        f"Created subscription for customer {customer.email}",
+        {"subscription_id": subscription.id, "status": status},
     )
-    subscription.save()
-    
-    log_webhook('webhook', f'Updated subscription {stripe_subscription_id} to {new_status}')
 
 
 def handle_subscription_deleted(subscription_data):
     """
-    Subscription cancelled.
+    Subscription cancelled/deleted.
     Stop the instance (but keep data for potential reactivation).
     """
-    stripe_subscription_id = subscription_data['id']
-    
+    stripe_subscription_id = subscription_data["id"]
+
     try:
         subscription = Subscription.objects.get(
             stripe_subscription_id=stripe_subscription_id
         )
     except Subscription.DoesNotExist:
+        log_webhook(
+            "webhook",
+            f"Subscription not found for deletion: {stripe_subscription_id}",
+        )
         return
-    
-    subscription.status = 'cancelled'
+
+    subscription.status = "cancelled"
     subscription.cancelled_at = timezone.now()
     subscription.save()
-    
+
     # Stop the instance
     instance = subscription.customer.instance
-    if instance and instance.status == 'running':
+    if instance and instance.status == "running":
         try:
             manager = DockerManager()
             manager.stop_instance(instance)
-            send_instance_stopped_email(instance, reason='subscription_cancelled')
+            send_instance_stopped_email(instance, reason="subscription_cancelled")
+            log_webhook("webhook", f"Stopped instance for cancelled subscription")
         except Exception as e:
-            log_webhook('error', f'Failed to stop instance: {e}')
-    
-    log_webhook('webhook', f'Cancelled subscription {stripe_subscription_id}')
+            log_webhook("error", f"Failed to stop instance: {e}")
+
+    log_webhook("webhook", f"Cancelled subscription {stripe_subscription_id}")
 
 
 def handle_payment_failed(invoice):
@@ -239,46 +311,88 @@ def handle_payment_failed(invoice):
     Payment failed.
     Mark subscription as past_due but don't immediately stop instance.
     """
-    stripe_subscription_id = invoice.get('subscription')
+    stripe_subscription_id = invoice.get("subscription")
     if not stripe_subscription_id:
         return
-    
+
     try:
         subscription = Subscription.objects.get(
             stripe_subscription_id=stripe_subscription_id
         )
-        subscription.status = 'past_due'
-        subscription.save(update_fields=['status'])
-        log_webhook('webhook', f'Payment failed for {stripe_subscription_id}')
+        subscription.status = "past_due"
+        subscription.save(update_fields=["status"])
+        log_webhook("webhook", f"Payment failed for {stripe_subscription_id}")
     except Subscription.DoesNotExist:
-        pass
+        log_webhook(
+            "webhook",
+            f"Subscription not found for failed payment: {stripe_subscription_id}",
+        )
 
 
 def handle_invoice_paid(invoice):
-    """
-    Invoice paid successfully.
-    If subscription was past_due, reactivate instance.
-    """
-    stripe_subscription_id = invoice.get('subscription')
+    stripe_subscription_id = invoice.get("subscription")
     if not stripe_subscription_id:
         return
-    
+
     try:
         subscription = Subscription.objects.get(
             stripe_subscription_id=stripe_subscription_id
         )
-        
-        if subscription.status == 'past_due':
-            subscription.status = 'active'
-            subscription.save(update_fields=['status'])
-            
-            # Restart instance if it was stopped
-            instance = subscription.customer.instance
-            if instance and instance.status == 'stopped':
-                manager = DockerManager()
-                manager.start_instance(instance)
-            
-            log_webhook('webhook', f'Reactivated subscription {stripe_subscription_id}')
-    
     except Subscription.DoesNotExist:
-        pass
+        log_webhook(
+            "webhook",
+            "Invoice paid but subscription not found",
+            {"stripe_subscription_id": stripe_subscription_id},
+        )
+        return
+
+    # Mark subscription active
+    if subscription.status != "active":
+        subscription.status = "active"
+        subscription.save(update_fields=["status"])
+
+    instance = subscription.customer.instance
+    if not instance:
+        log_webhook(
+            "error",
+            "Invoice paid but no instance found",
+            {"subscription_id": subscription.id},
+        )
+        return
+
+    # If already running AND email already sent, this is a retry or renewal
+    if instance.status == "running" and instance.welcome_email_sent:
+        log_webhook(
+            "webhook",
+            "Invoice paid retry received; instance already active",
+            {"instance_id": instance.id},
+        )
+        return
+
+    try:
+        manager = DockerManager()
+
+        # Provision if not running
+        if instance.status != "running":
+            manager.provision_instance(instance)
+            instance.status = "running"
+
+        # Send welcome email ONCE
+        if not instance.welcome_email_sent:
+            send_welcome_email(instance)
+            instance.welcome_email_sent = True
+
+        instance.save(update_fields=["status", "welcome_email_sent"])
+
+        log_webhook(
+            "webhook",
+            "Instance active and welcome email confirmed",
+            {"instance_id": instance.id},
+        )
+
+    except Exception as e:
+        log_webhook(
+            "error",
+            "Failed during invoice.paid handling",
+            {"instance_id": instance.id, "error": str(e)},
+        )
