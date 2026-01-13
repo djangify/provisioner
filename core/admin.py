@@ -13,6 +13,8 @@ from django.utils.html import format_html
 from django.urls import reverse
 from django.utils import timezone
 from .models import Customer, Subscription, Instance, ProvisioningLog
+from django.contrib.admin import SimpleListFilter
+from .email_service import send_welcome_email
 
 
 class SubscriptionInline(admin.TabularInline):
@@ -148,6 +150,36 @@ class SubscriptionAdmin(admin.ModelAdmin):
     status_badge.short_description = "Status"
 
 
+class EmailStatusFilter(SimpleListFilter):
+    title = "Email status"
+    parameter_name = "email_status"
+
+    def lookups(self, request, model_admin):
+        return (
+            ("welcome_sent", "Welcome email sent"),
+            ("welcome_not_sent", "Welcome email NOT sent"),
+            ("email_errors", "Has email errors"),
+        )
+
+    def queryset(self, request, queryset):
+        if self.value() == "welcome_sent":
+            return queryset.filter(welcome_email_sent=True)
+
+        if self.value() == "welcome_not_sent":
+            return queryset.filter(welcome_email_sent=False)
+
+        if self.value() == "email_errors":
+            error_instance_ids = ProvisioningLog.objects.filter(
+                action="error",
+                message__icontains="email",
+                instance__isnull=False,
+            ).values_list("instance_id", flat=True)
+
+            return queryset.filter(id__in=error_instance_ids)
+
+        return queryset
+
+
 @admin.register(Instance)
 class InstanceAdmin(admin.ModelAdmin):
     list_display = [
@@ -159,7 +191,7 @@ class InstanceAdmin(admin.ModelAdmin):
         "last_health_check",
         "created_at",
     ]
-    list_filter = ["status", "created_at"]
+    list_filter = ["status", "created_at", EmailStatusFilter]
     search_fields = ["subdomain", "customer__email", "container_id"]
     readonly_fields = [
         "container_id",
@@ -171,7 +203,13 @@ class InstanceAdmin(admin.ModelAdmin):
         "last_health_check",
         "full_url_link",
     ]
-    actions = ["start_instances", "stop_instances", "restart_instances", "check_health"]
+    actions = [
+        "start_instances",
+        "stop_instances",
+        "restart_instances",
+        "check_health",
+        "resend_welcome_email",
+    ]
 
     fieldsets = (
         ("Customer", {"fields": ("customer",)}),
@@ -234,6 +272,25 @@ class InstanceAdmin(admin.ModelAdmin):
         )
 
     status_badge.short_description = "Status"
+
+    @admin.action(description="📧 Resend welcome email")
+    def resend_welcome_email(self, request, queryset):
+        sent = 0
+        failed = 0
+
+        for instance in queryset:
+            success = send_welcome_email(instance)
+            if success:
+                instance.welcome_email_sent = True
+                instance.save(update_fields=["welcome_email_sent"])
+                sent += 1
+            else:
+                failed += 1
+
+        self.message_user(
+            request,
+            f"Welcome email resent: {sent} success, {failed} failed",
+        )
 
     # Admin Actions
     @admin.action(description="▶️ Start selected instances")
