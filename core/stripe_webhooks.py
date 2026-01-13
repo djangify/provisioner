@@ -1,21 +1,29 @@
 """
-Stripe Webhook Handler
+Stripe Webhook Handler (Order-Independent, Idempotent)
 
 Handles Stripe events:
-- checkout.session.completed → Create customer and Start / resume instance
-- customer.subscription.created → Create subscription record
+- checkout.session.completed → Create/Update customer + create/update pending instance (metadata lives here)
+- customer.subscription.created → Create/Update subscription record
 - customer.subscription.deleted → Cancel and stop instance
 - invoice.payment_failed → Mark subscription as past_due
-- invoice.paid → Reactivate if was past_due
+- invoice.paid → Confirm payment and provision (Docker + Nginx + Welcome email)
+
+Key design:
+- Stripe events can arrive out of order. Provisioning is STATE-DRIVEN, not EVENT-ORDER-DRIVEN.
+- Instance creation happens ONLY when we have checkout metadata (subdomain/site_name) to avoid "UNKNOWN" instances.
+- Provisioning is idempotent: safe on retries and safe across multiple webhook deliveries.
 """
 
+import re
 import stripe
+from datetime import datetime
+
 from django.conf import settings
 from django.http import HttpResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST
 from django.utils import timezone
-from datetime import datetime
+
 from .nginx_manager import NginxManager
 from .models import Customer, Subscription, Instance, ProvisioningLog
 from .docker_manager import DockerManager
@@ -28,13 +36,324 @@ from .email_service import (
 stripe.api_key = settings.STRIPE_SECRET_KEY
 
 
-def log_webhook(action, message, details=None):
+# -------------------------
+# Logging
+# -------------------------
+def log_webhook(action: str, message: str, details=None):
     """Log webhook events"""
     ProvisioningLog.objects.create(
-        instance=None, action="webhook", message=message, details=details or {}
+        instance=None,
+        action=action or "webhook",
+        message=message,
+        details=details or {},
     )
 
 
+# -------------------------
+# Helpers (Stripe → DB)
+# -------------------------
+def _get_or_create_customer(
+    stripe_customer_id: str, email: str | None = None
+) -> Customer:
+    """
+    Ensure a Customer row exists for a Stripe customer id.
+    If email is available, store/update it.
+    """
+    customer, created = Customer.objects.get_or_create(
+        stripe_customer_id=stripe_customer_id,
+        defaults={"email": email or ""},
+    )
+    if email and customer.email != email:
+        customer.email = email
+        customer.save(update_fields=["email"])
+
+    log_webhook(
+        "webhook",
+        f"Customer {'created' if created else 'found'}",
+        {
+            "customer_id": customer.id,
+            "email": customer.email,
+            "stripe_customer_id": stripe_customer_id,
+        },
+    )
+    return customer
+
+
+def _upsert_subscription_from_stripe(
+    stripe_subscription_obj, customer: Customer
+) -> Subscription:
+    """
+    Create/update a Subscription row from a Stripe subscription object.
+    """
+    stripe_subscription_id = stripe_subscription_obj.get("id", "")
+    status = stripe_subscription_obj.get("status", "active")
+
+    # Map Stripe status to our status
+    status_map = {
+        "active": "active",
+        "past_due": "past_due",
+        "canceled": "cancelled",
+        "unpaid": "unpaid",
+        "trialing": "trialing",
+        "incomplete": "active",
+        "incomplete_expired": "cancelled",
+    }
+
+    # Price ID
+    price_id = ""
+    items = stripe_subscription_obj.get("items", {})
+    if items and items.get("data"):
+        first_item = items["data"][0]
+        price = first_item.get("price", {})
+        price_id = price.get("id", "")
+
+    # Period dates
+    current_period_start = stripe_subscription_obj.get("current_period_start")
+    current_period_end = stripe_subscription_obj.get("current_period_end")
+
+    defaults = {
+        "customer": customer,
+        "stripe_price_id": price_id,
+        "status": status_map.get(status, status),
+        "current_period_start": datetime.fromtimestamp(
+            current_period_start, tz=timezone.utc
+        )
+        if current_period_start
+        else None,
+        "current_period_end": datetime.fromtimestamp(
+            current_period_end, tz=timezone.utc
+        )
+        if current_period_end
+        else None,
+    }
+
+    sub, created = Subscription.objects.update_or_create(
+        stripe_subscription_id=stripe_subscription_id,
+        defaults=defaults,
+    )
+
+    log_webhook(
+        "webhook",
+        f"{'Created' if created else 'Updated'} subscription for customer {customer.email}",
+        {
+            "subscription_id": sub.id,
+            "stripe_subscription_id": stripe_subscription_id,
+            "status": sub.status,
+        },
+    )
+    return sub
+
+
+def _get_or_create_subscription(
+    customer: Customer,
+    stripe_customer_id: str,
+    stripe_subscription_id: str | None = None,
+) -> Subscription | None:
+    """
+    Ensure a Subscription exists.
+    Preference:
+      1) DB by stripe_subscription_id (if provided)
+      2) DB by customer
+      3) Fetch from Stripe for that customer and upsert
+    """
+    subscription = None
+
+    if stripe_subscription_id:
+        subscription = Subscription.objects.filter(
+            stripe_subscription_id=stripe_subscription_id
+        ).first()
+
+    if not subscription:
+        subscription = (
+            Subscription.objects.filter(customer=customer).order_by("-id").first()
+        )
+
+    if subscription:
+        return subscription
+
+    # Last resort: fetch from Stripe
+    try:
+        stripe_subs = stripe.Subscription.list(customer=stripe_customer_id, limit=1)
+        if not stripe_subs.data:
+            log_webhook(
+                "error",
+                "No subscription found for customer in Stripe",
+                {"stripe_customer_id": stripe_customer_id},
+            )
+            return None
+
+        stripe_sub = stripe_subs.data[0]
+        log_webhook(
+            "webhook",
+            "Recovered subscription from Stripe",
+            {"stripe_subscription_id": stripe_sub.id},
+        )
+        return _upsert_subscription_from_stripe(stripe_sub, customer)
+
+    except stripe.error.StripeError as e:
+        log_webhook(
+            "error",
+            f"Failed to fetch subscription from Stripe: {e}",
+            {"stripe_customer_id": stripe_customer_id},
+        )
+        return None
+
+
+def _stripe_latest_invoice_is_paid(stripe_subscription_id: str) -> bool:
+    """
+    Conservative paid check.
+    For a subscription, inspect latest_invoice.paid where possible.
+    """
+    try:
+        sub = stripe.Subscription.retrieve(
+            stripe_subscription_id, expand=["latest_invoice"]
+        )
+        latest_invoice = sub.get("latest_invoice")
+        if isinstance(latest_invoice, dict):
+            return bool(latest_invoice.get("paid"))
+        # If latest_invoice is just an ID, retrieve it
+        if latest_invoice:
+            inv = stripe.Invoice.retrieve(latest_invoice)
+            return bool(inv.get("paid"))
+        return False
+    except stripe.error.StripeError as e:
+        log_webhook(
+            "error",
+            f"Stripe paid check failed: {e}",
+            {"stripe_subscription_id": stripe_subscription_id},
+        )
+        return False
+
+
+# -------------------------
+# Core: ensure provisioned
+# -------------------------
+def ensure_instance_provisioned(
+    *,
+    customer: Customer,
+    stripe_customer_id: str,
+    stripe_subscription_id: str | None = None,
+    payment_confirmed: bool = False,
+) -> bool:
+    """
+    State-driven provisioning:
+    - Requires: subscription is active AND (payment_confirmed OR Stripe indicates latest invoice paid)
+    - Requires: instance exists (created when we have checkout metadata)
+    - Idempotent: safe to call repeatedly
+    """
+    # Instance must exist (we only create it on checkout.session.completed when we have subdomain metadata)
+    instance = getattr(customer, "instance", None)
+    if not instance:
+        log_webhook(
+            "webhook",
+            "Provisioning deferred: customer has no instance yet (waiting for checkout metadata)",
+            {"customer_id": customer.id, "stripe_customer_id": stripe_customer_id},
+        )
+        return False
+
+    # Subscription must exist / be recoverable
+    subscription = _get_or_create_subscription(
+        customer, stripe_customer_id, stripe_subscription_id=stripe_subscription_id
+    )
+    if not subscription:
+        log_webhook(
+            "webhook",
+            "Provisioning deferred: no subscription record available yet",
+            {"customer_id": customer.id, "instance_id": instance.id},
+        )
+        return False
+
+    # Normalize subscription to active when appropriate (invoice.paid can arrive before subscription.created)
+    if subscription.status != "active":
+        # Only flip to active if we are certain
+        if payment_confirmed or (
+            stripe_subscription_id
+            and _stripe_latest_invoice_is_paid(stripe_subscription_id)
+        ):
+            subscription.status = "active"
+            subscription.save(update_fields=["status"])
+        else:
+            log_webhook(
+                "webhook",
+                "Provisioning deferred: subscription not active and payment not confirmed",
+                {
+                    "subscription_id": subscription.id,
+                    "status": subscription.status,
+                    "instance_id": instance.id,
+                },
+            )
+            return False
+
+    # Paid check (conservative)
+    if not payment_confirmed:
+        if stripe_subscription_id:
+            if not _stripe_latest_invoice_is_paid(stripe_subscription_id):
+                log_webhook(
+                    "webhook",
+                    "Provisioning deferred: latest invoice not confirmed paid yet",
+                    {
+                        "instance_id": instance.id,
+                        "stripe_subscription_id": stripe_subscription_id,
+                    },
+                )
+                return False
+        # If no stripe_subscription_id, we already recovered/created subscription; treat active as sufficient here.
+
+    # If already running and email sent, nothing to do
+    if instance.status == "running" and instance.welcome_email_sent:
+        log_webhook(
+            "webhook",
+            "Instance already running and welcome email already sent",
+            {"instance_id": instance.id},
+        )
+        return True
+
+    try:
+        manager = DockerManager()
+
+        # Provision container + nginx if not running
+        if instance.status != "running":
+            manager.provision_instance(instance)
+
+            nginx_manager = NginxManager()
+            nginx_manager.provision_nginx(instance)
+
+            instance.status = "running"
+
+        # Send welcome email ONCE (only mark sent if the send succeeds)
+        if not instance.welcome_email_sent:
+            sent = send_welcome_email(instance)
+            if sent:
+                instance.welcome_email_sent = True
+                send_admin_notification(instance)
+            else:
+                log_webhook(
+                    "error",
+                    "Welcome email failed to send (will retry on next paid/checkout event)",
+                    {"instance_id": instance.id},
+                )
+
+        instance.save(update_fields=["status", "welcome_email_sent"])
+
+        log_webhook(
+            "webhook",
+            "Instance active (provisioning ensured)",
+            {"instance_id": instance.id, "subdomain": instance.subdomain},
+        )
+        return True
+
+    except Exception as e:
+        log_webhook(
+            "error",
+            "Failed during provisioning ensure()",
+            {"instance_id": instance.id, "error": str(e)},
+        )
+        return False
+
+
+# -------------------------
+# Main webhook endpoint
+# -------------------------
 @csrf_exempt
 @require_POST
 def stripe_webhook(request):
@@ -50,17 +369,15 @@ def stripe_webhook(request):
             payload, sig_header, settings.STRIPE_WEBHOOK_SECRET
         )
     except ValueError:
-        log_webhook("webhook", "Invalid payload")
+        log_webhook("error", "Invalid payload")
         return HttpResponse(status=400)
     except stripe.error.SignatureVerificationError:
-        log_webhook("webhook", "Invalid signature")
+        log_webhook("error", "Invalid signature")
         return HttpResponse(status=400)
 
     event_type = event["type"]
-
     log_webhook("webhook", f"Received event: {event_type}", {"event_id": event["id"]})
 
-    # Route to appropriate handler
     handlers = {
         "checkout.session.completed": handle_checkout_completed,
         "customer.subscription.created": handle_subscription_created,
@@ -71,37 +388,40 @@ def stripe_webhook(request):
 
     handler = handlers.get(event_type)
     if not handler:
-        # Unhandled event - log it and return 200 to stop Stripe retrying
         log_webhook("webhook", f"Unhandled event type: {event_type}")
         return HttpResponse(status=200)
 
     try:
         handler(event["data"]["object"])
     except Exception as e:
+        # IMPORTANT: return 200 anyway so Stripe doesn't retry forever due to our bug
         log_webhook("error", f"Error handling {event_type}: {e}")
-        # Return 200 anyway to prevent Stripe retries for our bugs
 
     return HttpResponse(status=200)
 
 
+# -------------------------
+# Event handlers
+# -------------------------
 def handle_checkout_completed(session):
     """
-    Checkout completed successfully.
+    Checkout completed successfully (intent signal, metadata source).
 
-    This confirms user intent, NOT payment.
-    We create:
-    - Customer (if needed)
-    - Instance in 'pending' state
+    We create/update:
+    - Customer
+    - Instance in 'pending' state (ONLY here, because metadata lives here)
 
-    Actual provisioning happens on invoice.paid.
+    Then we call ensure_instance_provisioned() which will provision immediately
+    if subscription/payment is already active/confirmed (covers out-of-order events).
     """
-    import re
-
     email = session.get("customer_email")
     stripe_customer_id = session.get("customer")
+    stripe_subscription_id = session.get(
+        "subscription"
+    )  # may be present for subscription mode
     metadata = session.get("metadata", {}) or {}
 
-    subdomain = metadata.get("subdomain", "").lower().strip()
+    subdomain = (metadata.get("subdomain", "") or "").lower().strip()
     site_name = metadata.get("site_name", "My Shop")
 
     log_webhook(
@@ -112,12 +432,17 @@ def handle_checkout_completed(session):
             "stripe_customer_id": stripe_customer_id,
             "email": email,
             "subdomain": subdomain,
+            "stripe_subscription_id": stripe_subscription_id,
         },
     )
 
     # Safety checks
     if not stripe_customer_id:
-        log_webhook("error", "Checkout completed without customer ID", session)
+        log_webhook(
+            "error",
+            "Checkout completed without customer ID",
+            {"session_id": session.get("id")},
+        )
         return
 
     if not subdomain:
@@ -133,69 +458,82 @@ def handle_checkout_completed(session):
         log_webhook("error", f"Invalid subdomain format: {subdomain}")
         return
 
-    # Ensure subdomain is not already in use
+    # Ensure subdomain is not already in use (excluding deleted)
     if Instance.objects.filter(subdomain=subdomain).exclude(status="deleted").exists():
         log_webhook("error", f"Subdomain already taken: {subdomain}")
         return
 
-    # Create or update customer
-    customer, created = Customer.objects.get_or_create(
-        stripe_customer_id=stripe_customer_id,
-        defaults={"email": email},
-    )
+    # Customer
+    customer = _get_or_create_customer(stripe_customer_id, email=email)
 
-    if email and customer.email != email:
-        customer.email = email
-        customer.save(update_fields=["email"])
+    # Instance (ONLY here)
+    instance = getattr(customer, "instance", None)
 
-    log_webhook(
-        "webhook",
-        f"Customer {'created' if created else 'found'}",
-        {"customer_id": customer.id, "email": customer.email},
-    )
+    if instance:
+        # If an instance exists, ensure it matches this checkout's subdomain (guard)
+        if instance.subdomain != subdomain and instance.status != "deleted":
+            log_webhook(
+                "error",
+                "Customer already has an instance with a different subdomain",
+                {
+                    "customer_id": customer.id,
+                    "existing_subdomain": instance.subdomain,
+                    "new_subdomain": subdomain,
+                },
+            )
+            return
 
-    # Prevent duplicate instances for same customer + subdomain
-    existing_instance = (
-        Instance.objects.filter(customer=customer, subdomain=subdomain)
-        .exclude(status="deleted")
-        .first()
-    )
+        # Update fields if missing
+        changed = False
+        if site_name and instance.site_name != site_name:
+            instance.site_name = site_name
+            changed = True
+        if email and instance.admin_email != email:
+            instance.admin_email = email
+            changed = True
+        if instance.status == "deleted":
+            instance.status = "pending"
+            changed = True
 
-    if existing_instance:
+        if changed:
+            instance.save(update_fields=["site_name", "admin_email", "status"])
+
         log_webhook(
             "webhook",
-            "Instance already exists for customer and subdomain",
-            {"instance_id": existing_instance.id},
+            "Instance already exists for customer",
+            {"instance_id": instance.id, "subdomain": instance.subdomain},
         )
-        return
 
-    # Create instance in pending state
-    instance = Instance.objects.create(
+    else:
+        instance = Instance.objects.create(
+            customer=customer,
+            subdomain=subdomain,
+            site_name=site_name,
+            admin_email=email,
+            status="pending",
+        )
+        log_webhook(
+            "webhook",
+            "Instance created in pending state",
+            {"instance_id": instance.id, "subdomain": subdomain},
+        )
+
+    # Ensure provisioning now (covers out-of-order: invoice.paid may have arrived earlier)
+    ensure_instance_provisioned(
         customer=customer,
-        subdomain=subdomain,
-        site_name=site_name,
-        admin_email=email,
-        status="pending",
-    )
-
-    log_webhook(
-        "webhook",
-        "Instance created in pending state",
-        {
-            "instance_id": instance.id,
-            "subdomain": subdomain,
-        },
+        stripe_customer_id=stripe_customer_id,
+        stripe_subscription_id=stripe_subscription_id,
+        payment_confirmed=False,
     )
 
 
 def handle_subscription_created(subscription_data):
     """
     A new subscription was created.
-
-    This event fires once when a subscription is created, with clear intent.
-    We use this to create/update the subscription record with period dates.
+    We upsert the subscription record.
+    Then attempt ensure_instance_provisioned() (may still defer until instance exists).
     """
-    stripe_subscription_id = subscription_data["id"]
+    stripe_subscription_id = subscription_data.get("id")
     stripe_customer_id = subscription_data.get("customer")
     status = subscription_data.get("status", "active")
 
@@ -205,72 +543,32 @@ def handle_subscription_created(subscription_data):
         {"customer_id": stripe_customer_id, "status": status},
     )
 
-    # Find the customer
+    if not stripe_customer_id:
+        log_webhook(
+            "error",
+            "Subscription created without customer id",
+            {"stripe_subscription_id": stripe_subscription_id},
+        )
+        return
+
+    # Ensure customer exists (recover email from Stripe if needed)
     try:
         customer = Customer.objects.get(stripe_customer_id=stripe_customer_id)
     except Customer.DoesNotExist:
-        log_webhook(
-            "webhook",
-            f"Customer not found for subscription {stripe_subscription_id}",
-            {"stripe_customer_id": stripe_customer_id},
+        stripe_customer = stripe.Customer.retrieve(stripe_customer_id)
+        customer = _get_or_create_customer(
+            stripe_customer_id, email=stripe_customer.get("email")
         )
-        return
 
-    # Check if subscription already exists
-    existing_sub = Subscription.objects.filter(
-        stripe_subscription_id=stripe_subscription_id
-    ).first()
+    # Upsert subscription
+    _upsert_subscription_from_stripe(subscription_data, customer)
 
-    if existing_sub:
-        log_webhook(
-            "webhook",
-            f"Subscription already exists: {stripe_subscription_id}",
-        )
-        return
-
-    # Get price ID from subscription items
-    price_id = ""
-    items = subscription_data.get("items", {})
-    if items and items.get("data"):
-        first_item = items["data"][0]
-        price = first_item.get("price", {})
-        price_id = price.get("id", "")
-
-    # Get period dates safely
-    current_period_start = subscription_data.get("current_period_start")
-    current_period_end = subscription_data.get("current_period_end")
-
-    # Map Stripe status to our status
-    status_map = {
-        "active": "active",
-        "past_due": "past_due",
-        "canceled": "cancelled",
-        "unpaid": "unpaid",
-        "trialing": "trialing",
-        "incomplete": "active",  # Treat incomplete as active for now
-        "incomplete_expired": "cancelled",
-    }
-
-    # Create subscription record
-    subscription = Subscription.objects.create(
+    # Try provision (may defer)
+    ensure_instance_provisioned(
         customer=customer,
+        stripe_customer_id=stripe_customer_id,
         stripe_subscription_id=stripe_subscription_id,
-        stripe_price_id=price_id,
-        status=status_map.get(status, status),
-        current_period_start=datetime.fromtimestamp(
-            current_period_start, tz=timezone.utc
-        )
-        if current_period_start
-        else None,
-        current_period_end=datetime.fromtimestamp(current_period_end, tz=timezone.utc)
-        if current_period_end
-        else None,
-    )
-
-    log_webhook(
-        "webhook",
-        f"Created subscription for customer {customer.email}",
-        {"subscription_id": subscription.id, "status": status},
+        payment_confirmed=False,
     )
 
 
@@ -279,7 +577,7 @@ def handle_subscription_deleted(subscription_data):
     Subscription cancelled/deleted.
     Stop the instance (but keep data for potential reactivation).
     """
-    stripe_subscription_id = subscription_data["id"]
+    stripe_subscription_id = subscription_data.get("id")
 
     try:
         subscription = Subscription.objects.get(
@@ -287,25 +585,30 @@ def handle_subscription_deleted(subscription_data):
         )
     except Subscription.DoesNotExist:
         log_webhook(
-            "webhook",
-            f"Subscription not found for deletion: {stripe_subscription_id}",
+            "webhook", f"Subscription not found for deletion: {stripe_subscription_id}"
         )
         return
 
     subscription.status = "cancelled"
     subscription.cancelled_at = timezone.now()
-    subscription.save()
+    subscription.save(update_fields=["status", "cancelled_at"])
 
-    # Stop the instance
-    instance = subscription.customer.instance
+    # Stop the instance if running
+    instance = getattr(subscription.customer, "instance", None)
     if instance and instance.status == "running":
         try:
             manager = DockerManager()
             manager.stop_instance(instance)
             send_instance_stopped_email(instance, reason="subscription_cancelled")
-            log_webhook("webhook", "Stopped instance for cancelled subscription")
+            log_webhook(
+                "webhook",
+                "Stopped instance for cancelled subscription",
+                {"instance_id": instance.id},
+            )
         except Exception as e:
-            log_webhook("error", f"Failed to stop instance: {e}")
+            log_webhook(
+                "error", f"Failed to stop instance: {e}", {"instance_id": instance.id}
+            )
 
     log_webhook("webhook", f"Cancelled subscription {stripe_subscription_id}")
 
@@ -334,6 +637,13 @@ def handle_payment_failed(invoice):
 
 
 def handle_invoice_paid(invoice):
+    """
+    Payment confirmed.
+    This is the strongest signal we have, so we:
+    - Ensure customer exists (recover from Stripe)
+    - Ensure subscription exists (recover from Stripe)
+    - Attempt provisioning (will defer if instance doesn't exist yet)
+    """
     stripe_subscription_id = invoice.get("subscription")
     stripe_customer_id = invoice.get("customer")
 
@@ -351,119 +661,42 @@ def handle_invoice_paid(invoice):
         log_webhook("webhook", "Invoice paid but no customer ID - skipping")
         return
 
-    # Find the customer
+    # Ensure customer exists (recover from Stripe if missing)
     try:
         customer = Customer.objects.get(stripe_customer_id=stripe_customer_id)
     except Customer.DoesNotExist:
+        stripe_customer = stripe.Customer.retrieve(stripe_customer_id)
+        customer = _get_or_create_customer(
+            stripe_customer_id, email=stripe_customer.get("email")
+        )
         log_webhook(
-            "error",
-            "Invoice paid but customer not found",
+            "webhook",
+            "Recovered missing customer during invoice.paid",
             {"stripe_customer_id": stripe_customer_id},
         )
-        return
 
-    # Find subscription - either by ID from invoice, or by looking up via customer
-    subscription = None
-
-    if stripe_subscription_id:
-        subscription = Subscription.objects.filter(
-            stripe_subscription_id=stripe_subscription_id
-        ).first()
-
-    if not subscription:
-        # Try to find subscription via customer
-        subscription = Subscription.objects.filter(customer=customer).first()
-
-    if not subscription:
-        # Last resort: fetch from Stripe
-        try:
-            stripe_subs = stripe.Subscription.list(customer=stripe_customer_id, limit=1)
-            if stripe_subs.data:
-                stripe_sub = stripe_subs.data[0]
-                log_webhook(
-                    "webhook",
-                    f"Found subscription in Stripe: {stripe_sub.id}",
-                )
-                # Create subscription record using existing logic from handle_subscription_created
-                price_id = ""
-                items = stripe_sub.get("items", {})
-                if items and items.get("data"):
-                    first_item = items["data"][0]
-                    price = first_item.get("price", {})
-                    price_id = price.get("id", "")
-
-                subscription = Subscription.objects.create(
-                    customer=customer,
-                    stripe_subscription_id=stripe_sub.id,
-                    stripe_price_id=price_id,
-                    status="active",
-                )
-            else:
-                log_webhook(
-                    "error",
-                    "No subscription found for customer",
-                    {"stripe_customer_id": stripe_customer_id},
-                )
-                return
-        except stripe.error.StripeError as e:
-            log_webhook(
-                "error",
-                f"Failed to fetch subscription from Stripe: {e}",
-            )
-            return
-
-    # Mark subscription active
-    if subscription.status != "active":
+    # Ensure subscription exists (recover if missing)
+    subscription = _get_or_create_subscription(
+        customer, stripe_customer_id, stripe_subscription_id=stripe_subscription_id
+    )
+    if subscription and subscription.status != "active":
         subscription.status = "active"
         subscription.save(update_fields=["status"])
 
-    instance = subscription.customer.instance
-    if not instance:
-        log_webhook(
-            "error",
-            "Invoice paid but no instance found",
-            {"subscription_id": subscription.id},
-        )
-        return
+    # Attempt provisioning (may defer until checkout metadata creates instance)
+    ensured = ensure_instance_provisioned(
+        customer=customer,
+        stripe_customer_id=stripe_customer_id,
+        stripe_subscription_id=stripe_subscription_id,
+        payment_confirmed=True,
+    )
 
-    # If already running AND email already sent, this is a retry or renewal
-    if instance.status == "running" and instance.welcome_email_sent:
+    if not ensured:
         log_webhook(
             "webhook",
-            "Invoice paid retry received; instance already active",
-            {"instance_id": instance.id},
-        )
-        return
-
-    try:
-        manager = DockerManager()
-
-        # Provision if not running
-        if instance.status != "running":
-            manager.provision_instance(instance)
-
-            nginx_manager = NginxManager()
-            nginx_manager.provision_nginx(instance)
-
-            instance.status = "running"
-
-        # Send welcome email ONCE
-        if not instance.welcome_email_sent:
-            send_welcome_email(instance)
-            instance.welcome_email_sent = True
-            send_admin_notification(instance)
-
-        instance.save(update_fields=["status", "welcome_email_sent"])
-
-        log_webhook(
-            "webhook",
-            "Instance active and welcome email confirmed",
-            {"instance_id": instance.id},
-        )
-
-    except Exception as e:
-        log_webhook(
-            "error",
-            "Failed during invoice.paid handling",
-            {"instance_id": instance.id, "error": str(e)},
+            "invoice.paid received but provisioning deferred (waiting for checkout/session metadata)",
+            {
+                "stripe_customer_id": stripe_customer_id,
+                "stripe_subscription_id": stripe_subscription_id,
+            },
         )

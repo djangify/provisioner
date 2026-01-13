@@ -188,15 +188,16 @@ def send_admin_notification(instance):
 
     subject = f"New store provisioned: {instance.subdomain}"
     message = f"""
-A new eBuilder store has been provisioned:
 
-Store: {instance.site_name}
-Subdomain: {instance.subdomain}
-Customer Email: {instance.admin_email}
-URL: https://{instance.subdomain}.djangify.com
+    A new eBuilder store has been provisioned:
 
-Provisioned at: {instance.created_at}
-"""
+    Store: {instance.site_name}
+    Subdomain: {instance.subdomain}
+    Customer Email: {instance.admin_email}
+    URL: https://{instance.subdomain}.djangify.com
+
+    Provisioned at: {instance.created_at}
+    """
 
     send_mail(
         subject,

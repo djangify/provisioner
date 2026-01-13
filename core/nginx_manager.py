@@ -100,6 +100,8 @@ server {{
     # Max upload size
     client_max_body_size 100M;
     
+    
+    
     # Proxy to container
     location / {{
         proxy_pass http://ebuilder_{instance.subdomain};
@@ -121,20 +123,19 @@ server {{
         proxy_read_timeout 60s;
     }}
     
-    # Static files (served by Django/WhiteNoise, but could optimize here)
+    # Static files (served directly by host nginx)
     location /static/ {{
-        proxy_pass http://ebuilder_{instance.subdomain};
-        proxy_set_header Host $http_host;
+        alias /home/ebuilder/staticfiles/;
+        access_log off;
         expires 30d;
         add_header Cache-Control "public, immutable";
     }}
-    
-    # Media files
+
+    # Media files (served from the container)
     location /media/ {{
         proxy_pass http://ebuilder_{instance.subdomain};
-        proxy_set_header Host $http_host;
-        expires 7d;
-        add_header Cache-Control "public";
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
     }}
 }}
 """
