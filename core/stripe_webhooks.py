@@ -331,20 +331,82 @@ def handle_payment_failed(invoice):
 
 def handle_invoice_paid(invoice):
     stripe_subscription_id = invoice.get("subscription")
-    if not stripe_subscription_id:
+    stripe_customer_id = invoice.get("customer")
+
+    log_webhook(
+        "webhook",
+        "Processing invoice.paid",
+        {
+            "invoice_id": invoice.get("id"),
+            "subscription_id": stripe_subscription_id,
+            "customer_id": stripe_customer_id,
+        },
+    )
+
+    if not stripe_customer_id:
+        log_webhook("webhook", "Invoice paid but no customer ID - skipping")
         return
 
+    # Find the customer
     try:
-        subscription = Subscription.objects.get(
-            stripe_subscription_id=stripe_subscription_id
-        )
-    except Subscription.DoesNotExist:
+        customer = Customer.objects.get(stripe_customer_id=stripe_customer_id)
+    except Customer.DoesNotExist:
         log_webhook(
-            "webhook",
-            "Invoice paid but subscription not found",
-            {"stripe_subscription_id": stripe_subscription_id},
+            "error",
+            "Invoice paid but customer not found",
+            {"stripe_customer_id": stripe_customer_id},
         )
         return
+
+    # Find subscription - either by ID from invoice, or by looking up via customer
+    subscription = None
+
+    if stripe_subscription_id:
+        subscription = Subscription.objects.filter(
+            stripe_subscription_id=stripe_subscription_id
+        ).first()
+
+    if not subscription:
+        # Try to find subscription via customer
+        subscription = Subscription.objects.filter(customer=customer).first()
+
+    if not subscription:
+        # Last resort: fetch from Stripe
+        try:
+            stripe_subs = stripe.Subscription.list(customer=stripe_customer_id, limit=1)
+            if stripe_subs.data:
+                stripe_sub = stripe_subs.data[0]
+                log_webhook(
+                    "webhook",
+                    f"Found subscription in Stripe: {stripe_sub.id}",
+                )
+                # Create subscription record using existing logic from handle_subscription_created
+                price_id = ""
+                items = stripe_sub.get("items", {})
+                if items and items.get("data"):
+                    first_item = items["data"][0]
+                    price = first_item.get("price", {})
+                    price_id = price.get("id", "")
+
+                subscription = Subscription.objects.create(
+                    customer=customer,
+                    stripe_subscription_id=stripe_sub.id,
+                    stripe_price_id=price_id,
+                    status="active",
+                )
+            else:
+                log_webhook(
+                    "error",
+                    "No subscription found for customer",
+                    {"stripe_customer_id": stripe_customer_id},
+                )
+                return
+        except stripe.error.StripeError as e:
+            log_webhook(
+                "error",
+                f"Failed to fetch subscription from Stripe: {e}",
+            )
+            return
 
     # Mark subscription active
     if subscription.status != "active":

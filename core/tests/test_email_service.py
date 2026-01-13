@@ -1,11 +1,9 @@
-import pytest
 from unittest.mock import patch
 
 from core.email_service import send_welcome_email
 from core.models import ProvisioningLog, Customer, Instance
 
 
-@pytest.mark.django_db
 def test_send_welcome_email_logs_failure():
     customer = Customer.objects.create(
         email="test@example.com",
