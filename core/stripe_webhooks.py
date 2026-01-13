@@ -16,7 +16,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST
 from django.utils import timezone
 from datetime import datetime
-
+from .nginx_manager import NginxManager
 from .models import Customer, Subscription, Instance, ProvisioningLog
 from .docker_manager import DockerManager
 from .email_service import (
@@ -441,6 +441,10 @@ def handle_invoice_paid(invoice):
         # Provision if not running
         if instance.status != "running":
             manager.provision_instance(instance)
+
+            nginx_manager = NginxManager()
+            nginx_manager.provision_nginx(instance)
+
             instance.status = "running"
 
         # Send welcome email ONCE

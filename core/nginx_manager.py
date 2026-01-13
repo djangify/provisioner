@@ -80,8 +80,8 @@ server {{
     server_name {" ".join(server_names)};
     
     # SSL Configuration (using wildcard cert)
-    ssl_certificate /etc/letsencrypt/live/{self.base_domain}/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/{self.base_domain}/privkey.pem;
+    ssl_certificate {settings.WILDCARD_SSL_CERT};
+    ssl_certificate_key {settings.WILDCARD_SSL_KEY};
     ssl_session_timeout 1d;
     ssl_session_tickets off;
     

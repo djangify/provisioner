@@ -23,6 +23,12 @@ BASE_DOMAIN = os.environ.get("BASE_DOMAIN", "ebuilder.host")
 # Where the signup form lives (djangify.com marketing site)
 DJANGIFY_DOMAIN = os.environ.get("DJANGIFY_DOMAIN", "djangify.com")
 NGINX_CONFIG_DIR = os.environ.get("NGINX_CONFIG_DIR", "/etc/nginx/sites-enabled")
+WILDCARD_SSL_CERT = os.environ.get(
+    "WILDCARD_SSL_CERT", f"/etc/letsencrypt/live/{BASE_DOMAIN}/fullchain.pem"
+)
+WILDCARD_SSL_KEY = os.environ.get(
+    "WILDCARD_SSL_KEY", f"/etc/letsencrypt/live/{BASE_DOMAIN}/privkey.pem"
+)
 SERVER_IP = config("SERVER_IP")
 
 # Application definition
