@@ -175,8 +175,13 @@ server {{
     def test_config(self):
         """Test nginx configuration syntax"""
         try:
-            result = subprocess.run(["nginx", "-t"], capture_output=True, text=True)
-            return result.returncode == 0, result.stderr
+            result = subprocess.run(
+                ["/usr/bin/sudo", "/usr/sbin/nginx", "-t"],
+                capture_output=True,
+                text=True,
+            )
+            output = result.stderr or result.stdout
+            return result.returncode == 0, output
         except Exception as e:
             return False, str(e)
 
@@ -184,7 +189,9 @@ server {{
         """Reload nginx to apply new configuration"""
         try:
             result = subprocess.run(
-                ["systemctl", "reload", "nginx"], capture_output=True, text=True
+                ["/usr/bin/sudo", "/usr/bin/systemctl", "reload", "nginx"],
+                capture_output=True,
+                text=True,
             )
             return result.returncode == 0
         except Exception as e:
