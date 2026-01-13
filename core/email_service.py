@@ -180,3 +180,28 @@ The eBuilder Team
             },
         )
         return False
+
+
+def send_admin_notification(instance):
+    """Notify admin when a new store is provisioned"""
+    admin_email = settings.DEFAULT_FROM_EMAIL  # Or a specific admin email
+
+    subject = f"New store provisioned: {instance.subdomain}"
+    message = f"""
+A new eBuilder store has been provisioned:
+
+Store: {instance.site_name}
+Subdomain: {instance.subdomain}
+Customer Email: {instance.admin_email}
+URL: https://{instance.subdomain}.djangify.com
+
+Provisioned at: {instance.created_at}
+"""
+
+    send_mail(
+        subject,
+        message,
+        settings.DEFAULT_FROM_EMAIL,
+        [admin_email],  # Add your admin email here
+        fail_silently=True,
+    )

@@ -19,7 +19,11 @@ from datetime import datetime
 
 from .models import Customer, Subscription, Instance, ProvisioningLog
 from .docker_manager import DockerManager
-from .email_service import send_welcome_email, send_instance_stopped_email
+from .email_service import (
+    send_welcome_email,
+    send_instance_stopped_email,
+    send_admin_notification,
+)
 
 stripe.api_key = settings.STRIPE_SECRET_KEY
 
@@ -299,7 +303,7 @@ def handle_subscription_deleted(subscription_data):
             manager = DockerManager()
             manager.stop_instance(instance)
             send_instance_stopped_email(instance, reason="subscription_cancelled")
-            log_webhook("webhook", f"Stopped instance for cancelled subscription")
+            log_webhook("webhook", "Stopped instance for cancelled subscription")
         except Exception as e:
             log_webhook("error", f"Failed to stop instance: {e}")
 
@@ -443,6 +447,7 @@ def handle_invoice_paid(invoice):
         if not instance.welcome_email_sent:
             send_welcome_email(instance)
             instance.welcome_email_sent = True
+            send_admin_notification(instance)
 
         instance.save(update_fields=["status", "welcome_email_sent"])
 
