@@ -175,6 +175,11 @@ class Instance(models.Model):
     secret_key = models.CharField(max_length=255, blank=True)
     welcome_email_sent = models.BooleanField(default=False)
 
+    # Custom Domains
+    custom_domain = models.CharField(max_length=255, blank=True)
+    custom_domain_verified = models.BooleanField(default=False)
+    custom_domain_ssl = models.BooleanField(default=False)
+
     # Timestamps
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

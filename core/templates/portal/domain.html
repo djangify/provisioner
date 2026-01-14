@@ -1,7 +1,85 @@
 {% extends "portal/base.html" %}
-{% block title %}Domain | My Djangify{% endblock %}
+{% block title %}Custom Domain | My Djangify{% endblock %}
 
 {% block content %}
 <h1 class="text-2xl font-semibold mb-4">Custom Domain</h1>
-<p>Custom domains are coming soon.</p>
+
+<div id="domain-status" class="mb-4 text-sm"></div>
+
+<div class="space-y-4">
+    <input
+        id="domain-input"
+        type="text"
+        placeholder="example.com"
+        class="border rounded px-3 py-2 w-full max-w-md"
+    />
+
+    <div class="flex gap-2">
+        <button
+            id="save-domain"
+            class="bg-black text-white px-4 py-2 rounded"
+        >
+            Save domain
+        </button>
+
+        <button
+            id="verify-domain"
+            class="bg-gray-700 text-white px-4 py-2 rounded"
+        >
+            Verify & activate
+        </button>
+
+        <button
+            id="remove-domain"
+            class="bg-red-600 text-white px-4 py-2 rounded"
+        >
+            Remove
+        </button>
+    </div>
+</div>
+
+<script>
+const statusBox = document.getElementById("domain-status");
+
+function setStatus(msg, ok=true) {
+    statusBox.textContent = msg;
+    statusBox.className = ok ? "text-green-600" : "text-red-600";
+}
+
+document.getElementById("save-domain").onclick = async () => {
+    const domain = document.getElementById("domain-input").value;
+    const res = await fetch("/portal/api/domain/set/", {
+        method: "POST",
+        headers: {"Content-Type": "application/x-www-form-urlencoded"},
+        body: `domain=${domain}`
+    });
+    const data = await res.json();
+    if (data.success) {
+        setStatus(data.instructions);
+    } else {
+        setStatus(data.error, false);
+    }
+};
+
+document.getElementById("verify-domain").onclick = async () => {
+    setStatus("Checking DNS and setting up SSL…");
+    const res = await fetch("/portal/api/domain/verify/", { method: "POST" });
+    const data = await res.json();
+    if (data.success) {
+        setStatus("Domain is live with HTTPS.");
+    } else {
+        setStatus(data.error, false);
+    }
+};
+
+document.getElementById("remove-domain").onclick = async () => {
+    const res = await fetch("/portal/api/domain/remove/", { method: "DELETE" });
+    const data = await res.json();
+    if (data.success) {
+        setStatus("Custom domain removed.");
+    } else {
+        setStatus(data.error, false);
+    }
+};
+</script>
 {% endblock %}

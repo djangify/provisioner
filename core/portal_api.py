@@ -7,6 +7,13 @@ from .models import Customer
 from .portal_auth import portal_login, portal_logout, portal_login_required
 from django.views.decorators.csrf import csrf_exempt
 
+from core.services.custom_domain_service import (
+    verify_dns,
+    setup_custom_domain,
+    remove_custom_domain,
+)
+
+
 stripe.api_key = settings.STRIPE_SECRET_KEY
 
 
@@ -148,4 +155,45 @@ def portal_change_password_api(request):
 
     customer.set_portal_password(new_password)
 
+    return JsonResponse({"success": True})
+
+
+@portal_login_required
+@require_POST
+def portal_set_custom_domain_api(request):
+    instance = request.portal_customer.instance
+    domain = request.POST.get("domain", "").strip().lower()
+
+    instance.custom_domain = domain
+    instance.custom_domain_verified = False
+    instance.custom_domain_ssl = False
+    instance.save(
+        update_fields=["custom_domain", "custom_domain_verified", "custom_domain_ssl"]
+    )
+
+    return JsonResponse(
+        {
+            "success": True,
+            "instructions": f"Add an A record for {domain} → {settings.SERVER_IP}",
+        }
+    )
+
+
+@portal_login_required
+@require_POST
+def portal_verify_custom_domain_api(request):
+    instance = request.portal_customer.instance
+
+    try:
+        setup_custom_domain(instance)
+        return JsonResponse({"success": True})
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=400)
+
+
+@portal_login_required
+@require_POST
+def portal_remove_custom_domain_api(request):
+    instance = request.portal_customer.instance
+    remove_custom_domain(instance)
     return JsonResponse({"success": True})

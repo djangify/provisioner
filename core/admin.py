@@ -11,10 +11,10 @@ Provides a dashboard to:
 from django.contrib import admin
 from django.utils.html import format_html
 from django.urls import reverse
-from django.utils import timezone
 from .models import Customer, Subscription, Instance, ProvisioningLog
 from django.contrib.admin import SimpleListFilter
 from .email_service import send_welcome_email
+from core.services.custom_domain_service import setup_custom_domain, verify_dns
 
 
 class SubscriptionInline(admin.TabularInline):
@@ -392,3 +392,23 @@ class ProvisioningLogAdmin(admin.ModelAdmin):
         return obj.message[:100] + "..." if len(obj.message) > 100 else obj.message
 
     message_truncated.short_description = "Message"
+
+
+@admin.action(description="Check DNS propagation")
+def check_dns(self, request, queryset):
+    for instance in queryset:
+        ok = verify_dns(instance.custom_domain)
+        self.message_user(
+            request,
+            f"{instance.custom_domain}: {'OK' if ok else 'NOT RESOLVED'}",
+        )
+
+
+@admin.action(description="Setup custom domain")
+def setup_domain(self, request, queryset):
+    for instance in queryset:
+        try:
+            setup_custom_domain(instance)
+            self.message_user(request, f"{instance.custom_domain} provisioned")
+        except Exception as e:
+            self.message_user(request, str(e), level="error")

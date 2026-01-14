@@ -24,6 +24,12 @@ from .portal_views import (
     portal_password_view,
 )
 
+from .portal_api import (
+    portal_set_custom_domain_api,
+    portal_verify_custom_domain_api,
+    portal_remove_custom_domain_api,
+)
+
 app_name = "portal"
 
 urlpatterns = [
@@ -43,4 +49,8 @@ urlpatterns = [
     path("billing/", portal_billing_view, name="billing"),
     path("domain/", portal_domain_view, name="domain"),
     path("password/", portal_password_view, name="password"),
+    # custom domain
+    path("api/domain/set/", portal_set_custom_domain_api),
+    path("api/domain/verify/", portal_verify_custom_domain_api),
+    path("api/domain/remove/", portal_remove_custom_domain_api),
 ]
