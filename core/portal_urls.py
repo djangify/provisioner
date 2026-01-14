@@ -10,6 +10,13 @@ from .portal_api import (
     portal_logout_api,
 )
 
+from .portal_api import (
+    portal_dashboard_api,
+    portal_billing_api,
+    portal_cancel_subscription_api,
+    portal_change_password_api,
+)
+
 app_name = "portal"
 
 urlpatterns = [
@@ -19,4 +26,9 @@ urlpatterns = [
     # API
     path("api/login/", portal_login_api, name="api-login"),
     path("api/logout/", portal_logout_api, name="api-logout"),
+    # billing API
+    path("api/dashboard/", portal_dashboard_api, name="api-dashboard"),
+    path("api/billing/", portal_billing_api, name="api-billing"),
+    path("api/cancel/", portal_cancel_subscription_api, name="api-cancel"),
+    path("api/password/", portal_change_password_api, name="api-password"),
 ]
