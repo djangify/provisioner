@@ -11,6 +11,7 @@ import string
 from django.db import models
 from django.conf import settings
 from django.utils import timezone
+from django.contrib.auth.hashers import make_password, check_password
 
 
 def generate_temp_password(length=12):
@@ -40,6 +41,13 @@ class Customer(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    # password for portal my.djangify.com
+    portal_password = models.CharField(
+        max_length=128,
+        blank=True,
+        help_text="Hashed password for customer portal login",
+    )
+
     class Meta:
         ordering = ["-created_at"]
 
@@ -53,6 +61,21 @@ class Customer(models.Model):
     @property
     def instance(self):
         return self.instances.first()
+
+    def set_portal_password(self, raw_password: str):
+        """
+        Hash and store the portal password.
+        """
+        self.portal_password = make_password(raw_password)
+        self.save(update_fields=["portal_password"])
+
+    def check_portal_password(self, raw_password: str) -> bool:
+        """
+        Verify a portal password.
+        """
+        if not self.portal_password:
+            return False
+        return check_password(raw_password, self.portal_password)
 
 
 class Subscription(models.Model):
