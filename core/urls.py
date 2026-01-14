@@ -5,6 +5,7 @@ URL routing for the core API
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 
+
 from .views import (
     InstanceViewSet,
     CustomerViewSet,
@@ -27,8 +28,8 @@ urlpatterns = [
     path("create-checkout/", create_checkout, name="create-checkout"),
     # Admin dashboard endpoint
     path("stats/", dashboard_stats, name="dashboard-stats"),
-    # ViewSet routes
-    path("", include(router.urls)),
     # my.djangify.com portal
     path("portal/", include("core.portal_urls")),
+    # ViewSet routes
+    path("", include(router.urls)),
 ]

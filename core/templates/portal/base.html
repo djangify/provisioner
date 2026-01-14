@@ -1,0 +1,32 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>{% block title %}My Djangify{% endblock %}</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+
+    <!-- Use your existing compiled CSS -->
+    <link rel="stylesheet" href="{% static 'css/output.css' %}">
+</head>
+<body class="bg-slate-50 min-h-screen">
+
+<header class="bg-white border-b border-slate-200">
+    <div class="max-w-6xl mx-auto px-6 py-4 flex justify-between items-center">
+        <span class="font-semibold text-slate-800">Djangify eCommerce Customer Portal</span>
+
+        {% if request.portal_customer %}
+        <a href="{% url 'portal:logout' %}"
+           class="text-sm text-slate-600 hover:text-slate-900">
+            Log out
+        </a>
+        {% endif %}
+    </div>
+</header>
+
+<main class="max-w-6xl mx-auto px-6 py-10">
+    {% block content %}{% endblock %}
+</main>
+
+</body>
+</html>

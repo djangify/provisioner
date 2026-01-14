@@ -41,3 +41,23 @@ def portal_login_view(request):
 def portal_logout_view(request):
     portal_logout(request)
     return redirect("portal:login")
+
+
+@portal_login_required
+def portal_dashboard_view(request):
+    return render(request, "portal/dashboard.html")
+
+
+@portal_login_required
+def portal_billing_view(request):
+    return render(request, "portal/billing.html")
+
+
+@portal_login_required
+def portal_domain_view(request):
+    return render(request, "portal/domain.html")
+
+
+@portal_login_required
+def portal_password_view(request):
+    return render(request, "portal/password.html")

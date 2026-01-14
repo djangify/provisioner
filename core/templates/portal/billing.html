@@ -1,0 +1,32 @@
+{% extends "portal/base.html" %}
+{% block title %}Billing | My Djangify{% endblock %}
+
+{% block content %}
+<h1 class="text-2xl font-semibold mb-6">Billing</h1>
+
+<button id="manage"
+        class="bg-slate-900 text-white px-4 py-2 rounded">
+    Manage billing in Stripe
+</button>
+
+<button id="cancel"
+        class="ml-4 border border-red-600 text-red-600 px-4 py-2 rounded">
+    Cancel subscription
+</button>
+
+<script>
+document.getElementById("manage").onclick = () => {
+  fetch("{% url 'portal:api-billing' %}")
+    .then(r => r.json())
+    .then(d => window.location = d.url);
+};
+
+document.getElementById("cancel").onclick = () => {
+  if (!confirm("Cancel at period end?")) return;
+
+  fetch("{% url 'portal:api-cancel' %}", {method: "POST"})
+    .then(r => r.json())
+    .then(d => alert(d.message || "Cancelled"));
+};
+</script>
+{% endblock %}

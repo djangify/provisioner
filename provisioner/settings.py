@@ -18,6 +18,15 @@ DEBUG = False
 
 ALLOWED_HOSTS = os.environ.get("ALLOWED_HOSTS", "localhost,127.0.0.1").split(",")
 
+CSRF_TRUSTED_ORIGINS = [
+    origin.strip()
+    for origin in os.environ.get(
+        "CSRF_TRUSTED_ORIGINS", "http://localhost:8000,http://127.0.0.1:8000"
+    ).split(",")
+    if origin.strip()
+]
+
+
 # Domain settings
 BASE_DOMAIN = os.environ.get("BASE_DOMAIN", "ebuilder.host")
 # Where the signup form lives (djangify.com marketing site)

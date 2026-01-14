@@ -11,8 +11,10 @@ from django.conf import settings
 from django.core.mail import send_mail
 from .models import ProvisioningLog
 
+PORTAL_LOGIN_URL = "https://my.djangify.com/portal/login/"
 
-def send_welcome_email(instance):
+
+def send_welcome_email(instance, portal_password=None):
     """
     Send welcome email with login details.
     Called after instance is successfully provisioned.
@@ -27,6 +29,12 @@ def send_welcome_email(instance):
         "admin_email": instance.admin_email,
         "admin_password": instance.admin_password,
         "base_domain": settings.BASE_DOMAIN,
+        # Portal details
+        "portal_url": PORTAL_LOGIN_URL,
+        "portal_email": instance.customer.email
+        if hasattr(instance, "customer")
+        else instance.admin_email,
+        "portal_password": portal_password,
     }
 
     # Plain text version

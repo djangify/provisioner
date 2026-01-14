@@ -1,0 +1,51 @@
+{% extends "portal/base.html" %}
+{% block title %}Dashboard | My Djangify{% endblock %}
+
+{% block content %}
+<h1 class="text-2xl font-semibold mb-6">Dashboard</h1>
+
+<div id="dashboard" class="space-y-6 text-slate-700">
+    Loading…
+</div>
+
+<script>
+fetch("{% url 'portal:api-dashboard' %}")
+  .then(r => r.json())
+  .then(data => {
+    const el = document.getElementById("dashboard");
+
+    if (!data.instance) {
+        el.innerHTML = "<p>No instance found.</p>";
+        return;
+    }
+
+    el.innerHTML = `
+      <div class="bg-white border rounded-lg p-6">
+        <h2 class="text-lg font-semibold mb-2">${data.instance.site_name}</h2>
+        <p>Status: <strong>${data.instance.status}</strong></p>
+        <p class="mt-2">
+          <a href="${data.instance.url}" target="_blank"
+             class="text-blue-600 underline">
+            Visit site
+          </a>
+        </p>
+      </div>
+
+      <div class="flex gap-4">
+        <a href="{% url 'portal:billing' %}"
+           class="px-4 py-2 bg-slate-900 text-white rounded">
+           Billing
+        </a>
+        <a href="{% url 'portal:domain' %}"
+           class="px-4 py-2 border rounded">
+           Domain
+        </a>
+        <a href="{% url 'portal:password' %}"
+           class="px-4 py-2 border rounded">
+           Change password
+        </a>
+      </div>
+    `;
+  });
+</script>
+{% endblock %}
