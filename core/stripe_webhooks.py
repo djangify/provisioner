@@ -335,6 +335,7 @@ def ensure_instance_provisioned(
             if sent:
                 instance.welcome_email_sent = True
                 send_admin_notification(instance)
+
             else:
                 log_webhook(
                     "error",
