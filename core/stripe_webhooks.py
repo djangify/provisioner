@@ -322,7 +322,16 @@ def ensure_instance_provisioned(
 
         # Send welcome email ONCE (only mark sent if the send succeeds)
         if not instance.welcome_email_sent:
-            sent = send_welcome_email(instance)
+            customer = instance.customer
+
+            portal_password = None
+            if not customer.portal_password:
+                portal_password = Customer.objects.make_random_password()
+                customer.set_portal_password(portal_password)
+                customer.save(update_fields=["portal_password"])
+
+            sent = send_welcome_email(instance, portal_password=portal_password)
+
             if sent:
                 instance.welcome_email_sent = True
                 send_admin_notification(instance)

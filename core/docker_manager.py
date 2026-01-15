@@ -84,7 +84,7 @@ class DockerManager:
                 "EMAIL_HOST_PASSWORD": "",
                 "SECRET_KEY": instance.secret_key,
                 "DEBUG": "False",
-                "ALLOWED_HOSTS": f"{instance.subdomain}.{settings.BASE_DOMAIN},localhost",
+                "ALLOWED_HOSTS": "*",
                 "CSRF_TRUSTED_ORIGINS": f"https://{shop_domain}",
                 "CORS_ALLOWED_ORIGINS": f"https://{shop_domain}",
                 "DATABASE_URL": "sqlite:///db/db.sqlite3",

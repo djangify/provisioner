@@ -16,28 +16,30 @@ PORTAL_LOGIN_URL = "https://my.djangify.com/portal/login/"
 
 def send_welcome_email(instance, portal_password=None):
     """
-    Send welcome email with login details.
+    Send welcome email with admin + portal login details.
     Called after instance is successfully provisioned.
     """
-    subject = "Your eBuilder store is ready! 🎉"
 
-    context = {
-        "site_name": instance.site_name,
-        "subdomain": instance.subdomain,
-        "full_url": instance.full_url,
-        "admin_url": instance.admin_url,
-        "admin_email": instance.admin_email,
-        "admin_password": instance.admin_password,
-        "base_domain": settings.BASE_DOMAIN,
-        # Portal details
-        "portal_url": PORTAL_LOGIN_URL,
-        "portal_email": instance.customer.email
+    subject = "Your Djangify eCommerce store is ready!"
+
+    portal_email = (
+        instance.customer.email
         if hasattr(instance, "customer")
-        else instance.admin_email,
-        "portal_password": portal_password,
-    }
+        else instance.admin_email
+    )
 
-    # Plain text version
+    portal_block = ""
+    if portal_password:
+        portal_block = f"""
+CUSTOMER PORTAL ACCESS
+----------------------
+Portal URL: {PORTAL_LOGIN_URL}
+Email: {portal_email}
+Temporary Password: {portal_password}
+
+IMPORTANT: Please change your portal password after logging in.
+"""
+
     message = f"""
 Welcome to eBuilder Managed Hosting!
 
@@ -50,8 +52,8 @@ Admin URL: {instance.admin_url}
 Email: {instance.admin_email}
 Temporary Password: {instance.admin_password}
 
-IMPORTANT: Please change your password after logging in!
-
+IMPORTANT: Please change your admin password after logging in!
+{portal_block}
 GETTING STARTED
 ---------------
 1. Log in to your admin panel at {instance.admin_url}
@@ -65,19 +67,16 @@ Welcome aboard!
 The eBuilder Team
 """
 
-    # HTML version (optional, could use a template)
-    html_message = None
-
     try:
         send_mail(
             subject=subject,
             message=message,
             from_email=settings.DEFAULT_FROM_EMAIL,
             recipient_list=[instance.admin_email],
-            html_message=html_message,
             fail_silently=False,
         )
         return True
+
     except Exception as e:
         ProvisioningLog.objects.create(
             instance=instance,
