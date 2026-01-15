@@ -13,7 +13,7 @@ from django.utils.html import format_html
 from django.urls import reverse
 from .models import Customer, Subscription, Instance, ProvisioningLog
 from django.contrib.admin import SimpleListFilter
-from .email_service import send_welcome_email
+from .email_service import send_welcome_email, send_portal_access_email
 from core.services.custom_domain_service import setup_custom_domain, verify_dns
 
 
@@ -209,6 +209,7 @@ class InstanceAdmin(admin.ModelAdmin):
         "restart_instances",
         "check_health",
         "resend_welcome_email",
+        "resend_portal_access_email",
     ]
 
     fieldsets = (
@@ -291,6 +292,23 @@ class InstanceAdmin(admin.ModelAdmin):
             request,
             f"Welcome email resent: {sent} success, {failed} failed",
         )
+
+        @admin.action(description="🔐 Resend portal access email (includes password)")
+        def resend_portal_access_email(self, request, queryset):
+            sent = 0
+            failed = 0
+
+            for instance in queryset:
+                success = send_portal_access_email(instance)
+                if success:
+                    sent += 1
+                else:
+                    failed += 1
+
+            self.message_user(
+                request,
+                f"Portal access email sent: {sent} success, {failed} failed",
+            )
 
     # Admin Actions
     @admin.action(description="▶️ Start selected instances")

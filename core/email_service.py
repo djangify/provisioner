@@ -56,7 +56,7 @@ IMPORTANT: Please change your admin password after logging in!
 {portal_block}
 GETTING STARTED
 ---------------
-1. Log in to your admin panel at {instance.admin_url}
+1. Log in to your admin panel at {instance.admin_url} and change your password
 2. Go to Settings > Site Identity to update your store details
 3. Add your first product in Shop > Products
 4. Customise your homepage in Pages
@@ -64,7 +64,9 @@ GETTING STARTED
 Need help? Reply to this email or visit our documentation.
 
 Welcome aboard!
-The eBuilder Team
+Djangify eCommerce Builder
+https://www.djangify.com
+djangify@djangify.com
 """
 
     try:
@@ -87,6 +89,64 @@ The eBuilder Team
                 "error": str(e),
                 "type": "welcome",
             },
+        )
+        return False
+
+
+def send_portal_access_email(instance):
+    """
+    Resend portal access details INCLUDING existing portal password.
+    Does NOT generate or reset passwords.
+    """
+
+    customer = instance.customer
+
+    if not customer.portal_password:
+        # Safety guard: we cannot send what doesn't exist
+        ProvisioningLog.objects.create(
+            instance=instance,
+            action="error",
+            message="Portal access email requested but no portal password exists",
+        )
+        return False
+
+    subject = "Your Djangify customer portal access"
+
+    portal_email = customer.email
+
+    message = f"""
+CUSTOMER PORTAL ACCESS
+----------------------
+Portal URL: {PORTAL_LOGIN_URL}
+Email: {portal_email}
+Temporary Password: {customer.portal_password}
+
+IMPORTANT:
+Please log in and change your portal password as soon as possible.
+
+If you did not request this email, please contact support.
+
+Djangify eCommerce Builder
+https://www.djangify.com
+djangify@djangify.com
+"""
+
+    try:
+        send_mail(
+            subject=subject,
+            message=message,
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=[portal_email],
+            fail_silently=False,
+        )
+        return True
+
+    except Exception as e:
+        ProvisioningLog.objects.create(
+            instance=instance,
+            action="error",
+            message="Failed to send portal access email",
+            details={"error": str(e)},
         )
         return False
 
