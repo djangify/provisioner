@@ -8,6 +8,36 @@ This module provides functions to:
 - Clean up deleted containers
 """
 
+"""
+DO NOT MODIFY THIS FILE WITHOUT FULL CONTEXT 
+
+This file controls PRODUCTION INSTANCE ISOLATION.
+
+Critical invariants:
+- Main site runs on FIXED port 8000
+- Customer sites MUST use unique ports (8100+)
+- Each site MUST have persistent volume mounts:
+    /app/db
+    /app/media
+    /app/logs
+- Provisioning MUST NEVER:
+    - stop existing containers
+    - recreate the main container
+    - reuse container names
+    - reuse ports
+    - remove volume mounts
+
+Violating ANY of the above WILL:
+- overwrite existing sites
+- collapse routing
+- destroy instance identity
+- wipe data
+
+⚠️ This file is NOT a candidate for "simplification" or "cleanup".
+⚠️ Changes must be reviewed against the ORIGINAL architecture.
+"""
+
+
 import os
 import docker
 import requests
