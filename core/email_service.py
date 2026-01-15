@@ -41,7 +41,7 @@ IMPORTANT: Please change your portal password after logging in.
 """
 
     message = f"""
-Welcome to eBuilder Managed Hosting!
+Welcome to Djangify eCommerce Builder Managed Hosting!
 
 Your store "{instance.site_name}" is now live at:
 {instance.full_url}

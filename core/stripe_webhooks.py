@@ -23,7 +23,7 @@ from django.http import HttpResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST
 from django.utils import timezone
-
+from django.utils.crypto import get_random_string
 from .nginx_manager import NginxManager
 from .models import Customer, Subscription, Instance, ProvisioningLog
 from .docker_manager import DockerManager
@@ -326,7 +326,7 @@ def ensure_instance_provisioned(
 
             portal_password = None
             if not customer.portal_password:
-                portal_password = Customer.objects.make_random_password()
+                portal_password = get_random_string(12)
                 customer.set_portal_password(portal_password)
                 customer.save(update_fields=["portal_password"])
 
