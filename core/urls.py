@@ -29,7 +29,7 @@ urlpatterns = [
     # Admin dashboard endpoint
     path("stats/", dashboard_stats, name="dashboard-stats"),
     # my.djangify.com portal
-    path("portal/", include("core.portal_urls")),
+    # path("portal/", include("core.portal_urls")),
     # ViewSet routes
     path("", include(router.urls)),
 ]

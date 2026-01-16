@@ -1,3 +1,10 @@
+import os
+import docker
+import requests
+from django.conf import settings
+from django.utils import timezone
+from .models import Instance, ProvisioningLog
+
 """
 Docker Manager - Handles container lifecycle for eBuilder instances
 
@@ -36,14 +43,6 @@ Violating ANY of the above WILL:
 ⚠️ This file is NOT a candidate for "simplification" or "cleanup".
 ⚠️ Changes must be reviewed against the ORIGINAL architecture.
 """
-
-
-import os
-import docker
-import requests
-from django.conf import settings
-from django.utils import timezone
-from .models import Instance, ProvisioningLog
 
 
 class DockerManager:
