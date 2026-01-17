@@ -198,3 +198,25 @@ DEFAULT_FROM_EMAIL = os.environ.get("DEFAULT_FROM_EMAIL", "djangify@djangify.com
 ADMIN_SITE_HEADER = "eBuilder Provisioner"
 ADMIN_SITE_TITLE = "eBuilder Managed Hosting"
 ADMIN_INDEX_TITLE = "Instance Management"
+
+
+# ====================================================================
+# SECURITY SETTINGS
+# ====================================================================
+
+# Prevent clickjacking - no iframes allowed
+X_FRAME_OPTIONS = "DENY"
+
+# Only send cookies over HTTPS - comment out for local development
+SESSION_COOKIE_SECURE = True
+CSRF_COOKIE_SECURE = True
+
+# Prevent JavaScript access to session cookie
+SESSION_COOKIE_HTTPONLY = True
+
+# HSTS - tell browsers to only use HTTPS (start with 1 hour, increase later)
+SECURE_HSTS_SECONDS = 3600
+SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+
+# Prevent content-type sniffing
+SECURE_CONTENT_TYPE_NOSNIFF = True
