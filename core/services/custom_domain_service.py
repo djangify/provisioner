@@ -18,8 +18,8 @@ class CustomDomainError(Exception):
 # =========================
 
 
-# verify both root + www and compare against expected IP
 def verify_dns(domain: str) -> bool:
+    """Verify both root and www resolve to expected IP."""
     try:
         root_ip = socket.gethostbyname(domain)
         www_ip = socket.gethostbyname(f"www.{domain}")
@@ -33,10 +33,11 @@ def verify_dns(domain: str) -> bool:
 # =========================
 
 
-#  certbot failure is NON-FATAL
 def obtain_ssl_certificate(domain: str) -> bool:
+    """Run certbot to obtain SSL certificate. Non-fatal on failure."""
     cmd = [
-        "certbot",
+        "/usr/bin/sudo",
+        "/usr/bin/certbot",
         "--nginx",
         "-d",
         domain,
@@ -56,22 +57,12 @@ def obtain_ssl_certificate(domain: str) -> bool:
 
 
 # =========================
-# NGINX RELOAD (SAFE)
-# =========================
-
-
-# NEW: nginx config test + reload
-def reload_nginx():
-    subprocess.check_call(["sudo", "/usr/sbin/nginx", "-t"])
-    subprocess.check_call(["sudo", "/usr/bin/systemctl", "reload", "nginx"])
-
-
-# =========================
 # CONTAINER
 # =========================
 
 
 def update_container_allowed_hosts(instance):
+    """Restart container to pick up new ALLOWED_HOSTS."""
     manager = DockerManager()
     manager.restart_instance(instance)
 
@@ -82,14 +73,23 @@ def update_container_allowed_hosts(instance):
 
 
 def setup_custom_domain(instance):
+    """
+    Full custom domain provisioning:
+    1. Verify DNS
+    2. Write nginx config (HTTP)
+    3. Run certbot
+    4. Update nginx config (HTTPS)
+    5. Restart container
+    """
     domain = instance.custom_domain
 
     # ---- DNS CHECK ----
     if not verify_dns(domain):
         ProvisioningLog.objects.create(
             instance=instance,
-            action="dns_check",
+            action="error",
             message=f"DNS not yet pointing to server for {domain}",
+            details={"expected_ip": EXPECTED_IP},
         )
         raise CustomDomainError("DNS does not resolve to server IP")
 
@@ -98,7 +98,7 @@ def setup_custom_domain(instance):
 
     ProvisioningLog.objects.create(
         instance=instance,
-        action="dns_check",
+        action="webhook",
         message=f"DNS verified for {domain}",
     )
 
@@ -107,20 +107,11 @@ def setup_custom_domain(instance):
     # ---- NGINX (HTTP FIRST) ----
     nginx.provision_nginx(instance)
 
-    try:
-        reload_nginx()
-        ProvisioningLog.objects.create(
-            instance=instance,
-            action="nginx_reload",
-            message=f"Nginx reloaded for {domain} (HTTP)",
-        )
-    except Exception as e:
-        ProvisioningLog.objects.create(
-            instance=instance,
-            action="custom_domain_error",
-            message=f"Nginx reload failed for {domain}: {e}",
-        )
-        raise
+    ProvisioningLog.objects.create(
+        instance=instance,
+        action="create",
+        message=f"Nginx config written for {domain} (HTTP)",
+    )
 
     # ---- SSL ATTEMPT (NON-FATAL) ----
     ssl_ok = obtain_ssl_certificate(domain)
@@ -128,10 +119,10 @@ def setup_custom_domain(instance):
     if not ssl_ok:
         ProvisioningLog.objects.create(
             instance=instance,
-            action="ssl_issue",
-            message=f"SSL issuance failed for {domain} (retry later)",
+            action="error",
+            message=f"SSL issuance failed for {domain} (site works over HTTP, retry SSL later)",
         )
-        return  # IMPORTANT: DO NOT ROLLBACK ANYTHING
+        return  # DO NOT ROLLBACK - subdomain stays live
 
     instance.custom_domain_ssl = True
     instance.save(update_fields=["custom_domain_ssl"])
@@ -139,32 +130,27 @@ def setup_custom_domain(instance):
     # ---- NGINX (HTTPS ENABLED) ----
     nginx.provision_nginx(instance)
 
-    try:
-        reload_nginx()
-        ProvisioningLog.objects.create(
-            instance=instance,
-            action="nginx_reload",
-            message=f"Nginx reloaded for {domain} (HTTPS)",
-        )
-    except Exception as e:
-        ProvisioningLog.objects.create(
-            instance=instance,
-            action="custom_domain_error",
-            message=f"Nginx reload failed after SSL for {domain}: {e}",
-        )
-        return  # Still do not rollback
+    ProvisioningLog.objects.create(
+        instance=instance,
+        action="create",
+        message=f"Nginx config updated for {domain} (HTTPS)",
+    )
 
     # ---- CONTAINER RESTART ----
     update_container_allowed_hosts(instance)
 
     ProvisioningLog.objects.create(
         instance=instance,
-        action="custom_domain_ready",
+        action="create",
         message=f"Custom domain {domain} is live with SSL",
     )
 
 
 def remove_custom_domain(instance):
+    """
+    Remove custom domain from instance.
+    Subdomain continues to work.
+    """
     domain = instance.custom_domain
 
     # ---- CLEAR FLAGS FIRST ----
@@ -182,20 +168,10 @@ def remove_custom_domain(instance):
     nginx = NginxManager()
     nginx.provision_nginx(instance)
 
-    try:
-        reload_nginx()
-    except Exception as e:
-        ProvisioningLog.objects.create(
-            instance=instance,
-            action="custom_domain_error",
-            message=f"Nginx reload failed during removal of {domain}: {e}",
-        )
-        return
-
-    update_container_allowed_hosts(instance)
-
     ProvisioningLog.objects.create(
         instance=instance,
-        action="custom_domain_ready",
+        action="delete",
         message=f"Custom domain {domain} removed; subdomain remains active",
     )
+
+    update_container_allowed_hosts(instance)

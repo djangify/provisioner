@@ -8,7 +8,6 @@ from .portal_auth import portal_login, portal_logout, portal_login_required
 from django.views.decorators.csrf import csrf_exempt
 
 from core.services.custom_domain_service import (
-    verify_dns,
     setup_custom_domain,
     remove_custom_domain,
 )
@@ -48,8 +47,6 @@ def portal_logout_api(request):
 
 
 # Dashboard endpoint
-
-
 @portal_login_required
 @require_GET
 def portal_dashboard_api(request):
@@ -106,8 +103,6 @@ def portal_billing_api(request):
 
 
 # Cancel subscription endpoint - POST /portal/api/cancel/
-
-
 @portal_login_required
 @require_POST
 def portal_cancel_subscription_api(request):
@@ -158,31 +153,73 @@ def portal_change_password_api(request):
     return JsonResponse({"success": True})
 
 
+@csrf_exempt
 @portal_login_required
 @require_POST
 def portal_set_custom_domain_api(request):
-    instance = request.portal_customer.instance
-    domain = request.POST.get("domain", "").strip().lower()
+    """
+    Save custom domain (validation only, no provisioning yet).
+    """
+    import json
 
+    instance = request.portal_customer.instance
+
+    if not instance:
+        return JsonResponse({"error": "No instance found"}, status=400)
+
+    data = json.loads(request.body or "{}")
+
+    domain = (
+        data.get("domain", "")
+        .strip()
+        .lower()
+        .replace("https://", "")
+        .replace("http://", "")
+        .rstrip("/")
+    )
+
+    if not domain:
+        return JsonResponse({"error": "Domain is required"}, status=400)
+
+    if " " in domain or "." not in domain:
+        return JsonResponse({"error": "Invalid domain format"}, status=400)
+
+    # Save domain (not yet verified)
     instance.custom_domain = domain
     instance.custom_domain_verified = False
     instance.custom_domain_ssl = False
     instance.save(
-        update_fields=["custom_domain", "custom_domain_verified", "custom_domain_ssl"]
+        update_fields=[
+            "custom_domain",
+            "custom_domain_verified",
+            "custom_domain_ssl",
+        ]
     )
 
     return JsonResponse(
         {
             "success": True,
-            "instructions": f"Add an A record for {domain} → {settings.SERVER_IP}",
+            "instructions": f"Add A records for {domain} and www.{domain} pointing to {settings.SERVER_IP}. Then click 'Verify & activate'.",
         }
     )
 
 
+@csrf_exempt
 @portal_login_required
 @require_POST
 def portal_verify_custom_domain_api(request):
+    """
+    Verify DNS and provision nginx + SSL for custom domain.
+    """
     instance = request.portal_customer.instance
+
+    if not instance:
+        return JsonResponse({"error": "No instance found"}, status=400)
+
+    if not instance.custom_domain:
+        return JsonResponse(
+            {"error": "No custom domain set. Save a domain first."}, status=400
+        )
 
     try:
         setup_custom_domain(instance)
@@ -191,9 +228,17 @@ def portal_verify_custom_domain_api(request):
         return JsonResponse({"error": str(e)}, status=400)
 
 
+@csrf_exempt
 @portal_login_required
 @require_POST
 def portal_remove_custom_domain_api(request):
+    """
+    Remove custom domain from instance.
+    """
     instance = request.portal_customer.instance
+
+    if not instance:
+        return JsonResponse({"error": "No instance found"}, status=400)
+
     remove_custom_domain(instance)
     return JsonResponse({"success": True})

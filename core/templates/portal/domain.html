@@ -47,42 +47,63 @@ const statusBox = document.getElementById("domain-status");
 
 function setStatus(msg, ok=true) {
     statusBox.textContent = msg;
-    statusBox.className = ok ? "text-green-600" : "text-red-600";
+    statusBox.className = ok ? "text-green-600 mb-4 text-sm" : "text-red-600 mb-4 text-sm";
 }
 
 document.getElementById("save-domain").onclick = async () => {
-    const domain = document.getElementById("domain-input").value;
+    const domain = document.getElementById("domain-input").value.trim();
+    
+    if (!domain) {
+        setStatus("Please enter a domain", false);
+        return;
+    }
+    
+    setStatus("Saving...");
+    
     const res = await fetch("/portal/api/domain/set/", {
         method: "POST",
-        headers: {"Content-Type": "application/x-www-form-urlencoded"},
-        body: `domain=${domain}`
+        headers: {
+            "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ domain })
     });
+
     const data = await res.json();
     if (data.success) {
-        setStatus(data.instructions);
+        setStatus(data.instructions || "Domain saved. Click 'Verify & activate' when DNS is configured.");
     } else {
-        setStatus(data.error, false);
+        setStatus(data.error || "Failed to save domain", false);
     }
 };
 
 document.getElementById("verify-domain").onclick = async () => {
-    setStatus("Checking DNS and setting up SSL…");
+    setStatus("Checking DNS and setting up SSL... This may take a minute.");
+    
     const res = await fetch("/portal/api/domain/verify/", { method: "POST" });
     const data = await res.json();
+    
     if (data.success) {
-        setStatus("Domain is live with HTTPS.");
+        setStatus("Domain is live with HTTPS!");
     } else {
-        setStatus(data.error, false);
+        setStatus(data.error || "Verification failed", false);
     }
 };
 
 document.getElementById("remove-domain").onclick = async () => {
-    const res = await fetch("/portal/api/domain/remove/", { method: "DELETE" });
+    if (!confirm("Remove custom domain? Your subdomain will continue to work.")) {
+        return;
+    }
+    
+    setStatus("Removing...");
+    
+    const res = await fetch("/portal/api/domain/remove/", { method: "POST" });
     const data = await res.json();
+    
     if (data.success) {
         setStatus("Custom domain removed.");
+        document.getElementById("domain-input").value = "";
     } else {
-        setStatus(data.error, false);
+        setStatus(data.error || "Failed to remove domain", false);
     }
 };
 </script>
