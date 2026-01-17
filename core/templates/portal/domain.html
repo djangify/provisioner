@@ -4,21 +4,34 @@
 {% block content %}
 <h1 class="text-2xl font-semibold mb-4">Custom Domain</h1>
 
+<!-- Current Status -->
+<div id="current-status" class="mb-6 p-4 bg-white border rounded-lg">
+    <p class="text-slate-600">Loading current status...</p>
+</div>
+
+<!-- Status Messages -->
 <div id="domain-status" class="mb-4 text-sm"></div>
 
+<!-- Domain Input -->
 <div class="space-y-4">
-    <input
-        id="domain-input"
-        type="text"
-        placeholder="example.com"
-        class="border rounded px-3 py-2 w-full max-w-md"
-    />
+    <div>
+        <label class="block text-sm font-medium mb-1">Custom Domain</label>
+        <input
+            id="domain-input"
+            type="text"
+            placeholder="example.com"
+            class="border rounded px-3 py-2 w-full max-w-md"
+        />
+        <p class="text-sm text-slate-500 mt-1">
+            Enter your domain without http:// or www.
+        </p>
+    </div>
 
-    <div class="mt-4 flex flex-wrap gap-3">
+    <div class="flex flex-wrap gap-3">
         <button
             type="button"
             id="save-domain"
-            style="background:#111;color:#fff;padding:10px 16px;border-radius:6px;"
+            class="bg-slate-900 text-white px-4 py-2 rounded hover:bg-slate-800"
         >
             Save domain
         </button>
@@ -26,32 +39,114 @@
         <button
             type="button"
             id="verify-domain"
-            style="background:#444;color:#fff;padding:10px 16px;border-radius:6px;"
+            class="bg-slate-700 text-white px-4 py-2 rounded hover:bg-slate-600"
         >
             Verify & activate
         </button>
 
         <button
             type="button"
+            id="retry-ssl"
+            class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-500 hidden"
+        >
+            Retry SSL
+        </button>
+
+        <button
+            type="button"
             id="remove-domain"
-            style="background:#b91c1c;color:#fff;padding:10px 16px;border-radius:6px;"
+            class="border border-red-600 text-red-600 px-4 py-2 rounded hover:bg-red-50"
         >
             Remove
         </button>
     </div>
+</div>
 
+<!-- Instructions -->
+<div id="instructions" class="mt-6 p-4 bg-slate-100 rounded-lg hidden">
+    <h3 class="font-semibold mb-2">DNS Configuration Required</h3>
+    <p class="text-sm text-slate-700 mb-2">
+        Add these DNS records at your domain registrar:
+    </p>
+    <div class="bg-white p-3 rounded font-mono text-sm">
+        <p>Type: <strong>A</strong> | Name: <strong>@</strong> | Value: <strong id="server-ip"></strong></p>
+        <p>Type: <strong>A</strong> | Name: <strong>www</strong> | Value: <strong id="server-ip-www"></strong></p>
+    </div>
+    <p class="text-sm text-slate-600 mt-2">
+        DNS changes can take up to 48 hours to propagate, but usually work within 5-10 minutes.
+    </p>
 </div>
 
 <script>
 const statusBox = document.getElementById("domain-status");
+const currentStatus = document.getElementById("current-status");
+const domainInput = document.getElementById("domain-input");
+const instructions = document.getElementById("instructions");
+const retryBtn = document.getElementById("retry-ssl");
 
 function setStatus(msg, ok=true) {
     statusBox.textContent = msg;
-    statusBox.className = ok ? "text-green-600 mb-4 text-sm" : "text-red-600 mb-4 text-sm";
+    statusBox.className = ok 
+        ? "text-green-600 mb-4 text-sm" 
+        : "text-red-600 mb-4 text-sm";
 }
 
+function showInstructions(serverIp) {
+    document.getElementById("server-ip").textContent = serverIp;
+    document.getElementById("server-ip-www").textContent = serverIp;
+    instructions.classList.remove("hidden");
+}
+
+function hideInstructions() {
+    instructions.classList.add("hidden");
+}
+
+// Load current status on page load
+async function loadStatus() {
+    try {
+        const res = await fetch("/portal/api/domain/status/");
+        const data = await res.json();
+        
+        if (data.error) {
+            currentStatus.innerHTML = `<p class="text-red-600">${data.error}</p>`;
+            return;
+        }
+        
+        let html = `<p class="mb-2"><strong>Subdomain:</strong> <a href="${data.subdomain_url}" target="_blank" class="text-blue-600 underline">${data.subdomain_url}</a></p>`;
+        
+        if (data.custom_domain) {
+            domainInput.value = data.custom_domain;
+            
+            let statusBadge = '';
+            if (data.custom_domain_ssl) {
+                statusBadge = '<span class="bg-green-100 text-green-800 px-2 py-1 rounded text-xs ml-2">HTTPS Active</span>';
+            } else if (data.custom_domain_verified) {
+                statusBadge = '<span class="bg-yellow-100 text-yellow-800 px-2 py-1 rounded text-xs ml-2">Verified (SSL Pending)</span>';
+                retryBtn.classList.remove("hidden");
+            } else {
+                statusBadge = '<span class="bg-slate-100 text-slate-800 px-2 py-1 rounded text-xs ml-2">Not Verified</span>';
+                showInstructions(data.server_ip);
+            }
+            
+            html += `<p class="mb-2"><strong>Custom Domain:</strong> ${data.custom_domain} ${statusBadge}</p>`;
+            
+            if (data.custom_domain_url) {
+                html += `<p><a href="${data.custom_domain_url}" target="_blank" class="text-blue-600 underline">${data.custom_domain_url}</a></p>`;
+            }
+        } else {
+            html += `<p class="text-slate-500">No custom domain configured</p>`;
+        }
+        
+        currentStatus.innerHTML = html;
+        
+    } catch (e) {
+        currentStatus.innerHTML = `<p class="text-red-600">Failed to load status</p>`;
+    }
+}
+
+// Save domain
 document.getElementById("save-domain").onclick = async () => {
-    const domain = document.getElementById("domain-input").value.trim();
+    const domain = domainInput.value.trim();
     
     if (!domain) {
         setStatus("Please enter a domain", false);
@@ -60,35 +155,70 @@ document.getElementById("save-domain").onclick = async () => {
     
     setStatus("Saving...");
     
-    const res = await fetch("/portal/api/domain/set/", {
-        method: "POST",
-        headers: {
-            "Content-Type": "application/json"
-        },
-        body: JSON.stringify({ domain })
-    });
+    try {
+        const res = await fetch("/portal/api/domain/set/", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ domain })
+        });
 
-    const data = await res.json();
-    if (data.success) {
-        setStatus(data.instructions || "Domain saved. Click 'Verify & activate' when DNS is configured.");
-    } else {
-        setStatus(data.error || "Failed to save domain", false);
+        const data = await res.json();
+        
+        if (data.success) {
+            setStatus(data.instructions || "Domain saved.");
+            if (data.server_ip) {
+                showInstructions(data.server_ip);
+            }
+            loadStatus();
+        } else {
+            setStatus(data.error || "Failed to save domain", false);
+        }
+    } catch (e) {
+        setStatus("Network error - please try again", false);
     }
 };
 
+// Verify & activate
 document.getElementById("verify-domain").onclick = async () => {
     setStatus("Checking DNS and setting up SSL... This may take a minute.");
     
-    const res = await fetch("/portal/api/domain/verify/", { method: "POST" });
-    const data = await res.json();
-    
-    if (data.success) {
-        setStatus("Domain is live with HTTPS!");
-    } else {
-        setStatus(data.error || "Verification failed", false);
+    try {
+        const res = await fetch("/portal/api/domain/verify/", { method: "POST" });
+        const data = await res.json();
+        
+        if (data.success) {
+            setStatus(data.message || "Domain is live!");
+            hideInstructions();
+            loadStatus();
+        } else {
+            setStatus(data.error || "Verification failed", false);
+        }
+    } catch (e) {
+        setStatus("Network error - please try again", false);
     }
 };
 
+// Retry SSL
+document.getElementById("retry-ssl").onclick = async () => {
+    setStatus("Requesting SSL certificate...");
+    
+    try {
+        const res = await fetch("/portal/api/domain/retry-ssl/", { method: "POST" });
+        const data = await res.json();
+        
+        if (data.success) {
+            setStatus(data.message || "SSL certificate issued!");
+            retryBtn.classList.add("hidden");
+            loadStatus();
+        } else {
+            setStatus(data.error || "SSL retry failed", false);
+        }
+    } catch (e) {
+        setStatus("Network error - please try again", false);
+    }
+};
+
+// Remove domain
 document.getElementById("remove-domain").onclick = async () => {
     if (!confirm("Remove custom domain? Your subdomain will continue to work.")) {
         return;
@@ -96,15 +226,25 @@ document.getElementById("remove-domain").onclick = async () => {
     
     setStatus("Removing...");
     
-    const res = await fetch("/portal/api/domain/remove/", { method: "POST" });
-    const data = await res.json();
-    
-    if (data.success) {
-        setStatus("Custom domain removed.");
-        document.getElementById("domain-input").value = "";
-    } else {
-        setStatus(data.error || "Failed to remove domain", false);
+    try {
+        const res = await fetch("/portal/api/domain/remove/", { method: "POST" });
+        const data = await res.json();
+        
+        if (data.success) {
+            setStatus(data.message || "Custom domain removed.");
+            domainInput.value = "";
+            hideInstructions();
+            retryBtn.classList.add("hidden");
+            loadStatus();
+        } else {
+            setStatus(data.error || "Failed to remove domain", false);
+        }
+    } catch (e) {
+        setStatus("Network error - please try again", false);
     }
 };
+
+// Load status on page load
+loadStatus();
 </script>
 {% endblock %}
