@@ -1,0 +1,89 @@
+<!-- Billing Section Include -->
+<div class="space-y-6">
+    <div>
+        <h3 class="text-lg font-semibold text-slate-900">Billing &amp; Subscription</h3>
+        <p class="text-sm text-slate-500 mt-1">Manage your payment method and subscription</p>
+    </div>
+
+    <!-- Billing Overview -->
+    <div class="p-4 bg-slate-50 rounded-lg border border-slate-200">
+        <div class="flex items-center justify-between">
+            <div>
+                <p class="text-sm font-medium text-slate-900">eBuilder Managed Hosting</p>
+                <p class="text-sm text-slate-500">£12/month</p>
+            </div>
+            <div id="billing-status" class="text-right">
+                <p class="text-sm font-medium text-green-600">Active</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Actions -->
+    <div class="flex flex-wrap gap-3">
+        <button
+            id="manage-billing-btn"
+            class="px-4 py-2 bg-slate-900 text-white text-sm font-medium rounded hover:bg-slate-800 transition inline-flex items-center gap-2"
+        >
+            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M13.5 6H5.25A2.25 2.25 0 0 0 3 8.25v10.5A2.25 2.25 0 0 0 5.25 21h10.5A2.25 2.25 0 0 0 18 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25" />
+            </svg>
+            Manage Billing in Stripe
+        </button>
+        <button
+            id="cancel-subscription-btn"
+            class="px-4 py-2 border border-red-300 text-red-600 text-sm font-medium rounded hover:bg-red-50 transition"
+        >
+            Cancel Subscription
+        </button>
+    </div>
+
+    <!-- Info -->
+    <p class="text-xs text-slate-500">
+        Billing is securely managed through Stripe. Click "Manage Billing" to update your payment method, view invoices, or download receipts.
+    </p>
+</div>
+
+<script>
+(function() {
+    // Manage billing - redirect to Stripe portal
+    document.getElementById('manage-billing-btn').onclick = async () => {
+        try {
+            const res = await fetch("{% url 'portal:api-billing' %}");
+            const data = await res.json();
+            
+            if (data.url) {
+                window.location = data.url;
+            } else {
+                showToast(data.error || 'Failed to open billing portal', 'error');
+            }
+        } catch (e) {
+            showToast('Network error - please try again', 'error');
+        }
+    };
+
+    // Cancel subscription with proper modal
+    document.getElementById('cancel-subscription-btn').onclick = () => {
+        showModal(
+            'Cancel Subscription',
+            'Your subscription will remain active until the end of your current billing period. After that, your store will be paused but your data will be kept for 30 days.',
+            async () => {
+                try {
+                    const res = await fetch("{% url 'portal:api-cancel' %}", { method: 'POST' });
+                    const data = await res.json();
+                    
+                    if (data.success) {
+                        showToast(data.message || 'Subscription will cancel at period end', 'success');
+                        loadDashboard(); // Refresh to show updated status
+                    } else {
+                        showToast(data.error || 'Failed to cancel subscription', 'error');
+                    }
+                } catch (e) {
+                    showToast('Network error - please try again', 'error');
+                }
+            },
+            'Cancel Subscription',
+            true
+        );
+    };
+})();
+</script>

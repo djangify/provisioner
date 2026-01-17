@@ -1,0 +1,206 @@
+<!-- Domain Section Include -->
+<div class="space-y-6">
+    <div>
+        <h3 class="text-lg font-semibold text-slate-900">Custom Domain</h3>
+        <p class="text-sm text-slate-500 mt-1">Connect your own domain to your store</p>
+    </div>
+
+    <!-- Status Message -->
+    <div id="domain-status" class="hidden">
+        <div class="flex items-center gap-2 p-3 rounded-lg text-sm">
+            <span id="domain-status-icon"></span>
+            <span id="domain-status-text"></span>
+        </div>
+    </div>
+
+    <!-- Domain Input -->
+    <div class="max-w-md">
+        <label class="block text-sm font-medium text-slate-700 mb-1">Domain Name</label>
+        <input
+            id="domain-input"
+            type="text"
+            placeholder="shop.yourdomain.com"
+            class="w-full border border-slate-300 rounded px-3 py-2 text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-900 focus:border-transparent"
+        />
+        <p class="text-xs text-slate-500 mt-1.5">Enter without http:// or www.</p>
+    </div>
+
+    <!-- DNS Instructions (shown after saving) -->
+    <div id="dns-instructions" class="hidden p-4 bg-slate-50 rounded-lg border border-slate-200">
+        <h4 class="font-medium text-slate-900 mb-2">DNS Configuration Required</h4>
+        <p class="text-sm text-slate-600 mb-3">Add these A records at your domain registrar:</p>
+        <div class="bg-white border border-slate-200 rounded p-3 font-mono text-sm space-y-1">
+            <p><span class="text-slate-500">Type:</span> A &nbsp; <span class="text-slate-500">Name:</span> @ &nbsp; <span class="text-slate-500">Value:</span> <span id="dns-ip-root" class="text-slate-900 font-semibold"></span></p>
+            <p><span class="text-slate-500">Type:</span> A &nbsp; <span class="text-slate-500">Name:</span> www &nbsp; <span class="text-slate-500">Value:</span> <span id="dns-ip-www" class="text-slate-900 font-semibold"></span></p>
+        </div>
+        <p class="text-xs text-slate-500 mt-2">DNS changes typically propagate within 5-10 minutes, but can take up to 48 hours.</p>
+    </div>
+
+    <!-- Actions -->
+    <div class="flex flex-wrap gap-3">
+        <button
+            id="save-domain-btn"
+            class="px-4 py-2 bg-slate-900 text-white text-sm font-medium rounded hover:bg-slate-800 transition"
+        >
+            Save Domain
+        </button>
+        <button
+            id="verify-domain-btn"
+            class="px-4 py-2 bg-slate-700 text-white text-sm font-medium rounded hover:bg-slate-600 transition"
+        >
+            Verify &amp; Activate
+        </button>
+        <button
+            id="retry-ssl-btn"
+            class="hidden px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded hover:bg-blue-500 transition"
+        >
+            Retry SSL
+        </button>
+        <button
+            id="remove-domain-btn"
+            class="px-4 py-2 border border-slate-300 text-slate-700 text-sm font-medium rounded hover:bg-slate-50 transition"
+        >
+            Remove Domain
+        </button>
+    </div>
+</div>
+
+<script>
+(function() {
+    const domainInput = document.getElementById('domain-input');
+    const statusEl = document.getElementById('domain-status');
+    const dnsInstructions = document.getElementById('dns-instructions');
+    const retrySslBtn = document.getElementById('retry-ssl-btn');
+
+    function setDomainStatus(msg, type = 'info') {
+        const colors = {
+            success: 'bg-green-50 text-green-800',
+            error: 'bg-red-50 text-red-800',
+            info: 'bg-blue-50 text-blue-800',
+            warning: 'bg-yellow-50 text-yellow-800'
+        };
+        const icons = {
+            success: '<svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>',
+            error: '<svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"/></svg>',
+            info: '<svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/></svg>',
+            warning: '<svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/></svg>'
+        };
+        
+        statusEl.className = `flex items-center gap-2 p-3 rounded-lg text-sm ${colors[type]}`;
+        document.getElementById('domain-status-icon').innerHTML = icons[type];
+        document.getElementById('domain-status-text').textContent = msg;
+        statusEl.classList.remove('hidden');
+    }
+
+    function showDnsInstructions(ip) {
+        document.getElementById('dns-ip-root').textContent = ip;
+        document.getElementById('dns-ip-www').textContent = ip;
+        dnsInstructions.classList.remove('hidden');
+    }
+
+    // Save domain
+    document.getElementById('save-domain-btn').onclick = async () => {
+        const domain = domainInput.value.trim();
+        if (!domain) {
+            setDomainStatus('Please enter a domain', 'error');
+            return;
+        }
+
+        setDomainStatus('Saving domain...', 'info');
+
+        try {
+            const res = await fetch('/portal/api/domain/set/', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ domain })
+            });
+            const data = await res.json();
+
+            if (data.success) {
+                setDomainStatus('Domain saved. Configure DNS then click Verify & Activate.', 'success');
+                if (data.server_ip) showDnsInstructions(data.server_ip);
+                showToast('Domain saved', 'success');
+            } else {
+                setDomainStatus(data.error || 'Failed to save domain', 'error');
+            }
+        } catch (e) {
+            setDomainStatus('Network error - please try again', 'error');
+        }
+    };
+
+    // Verify domain
+    document.getElementById('verify-domain-btn').onclick = async () => {
+        setDomainStatus('Checking DNS and configuring SSL... This may take a minute.', 'info');
+
+        try {
+            const res = await fetch('/portal/api/domain/verify/', { method: 'POST' });
+            const data = await res.json();
+
+            if (data.success) {
+                setDomainStatus(data.message || 'Domain is live with HTTPS!', 'success');
+                dnsInstructions.classList.add('hidden');
+                showToast('Domain activated!', 'success');
+                loadDashboard(); // Refresh dashboard data
+            } else {
+                setDomainStatus(data.error || 'Verification failed', 'error');
+                if (data.error && data.error.includes('SSL')) {
+                    retrySslBtn.classList.remove('hidden');
+                }
+            }
+        } catch (e) {
+            setDomainStatus('Network error - please try again', 'error');
+        }
+    };
+
+    // Retry SSL
+    document.getElementById('retry-ssl-btn').onclick = async () => {
+        setDomainStatus('Requesting SSL certificate...', 'info');
+
+        try {
+            const res = await fetch('/portal/api/domain/retry-ssl/', { method: 'POST' });
+            const data = await res.json();
+
+            if (data.success) {
+                setDomainStatus('SSL certificate issued!', 'success');
+                retrySslBtn.classList.add('hidden');
+                showToast('SSL activated!', 'success');
+            } else {
+                setDomainStatus(data.error || 'SSL retry failed', 'error');
+            }
+        } catch (e) {
+            setDomainStatus('Network error - please try again', 'error');
+        }
+    };
+
+    // Remove domain
+    document.getElementById('remove-domain-btn').onclick = () => {
+        showModal(
+            'Remove Custom Domain',
+            'Your subdomain will continue to work. Are you sure you want to remove the custom domain?',
+            async () => {
+                setDomainStatus('Removing domain...', 'info');
+
+                try {
+                    const res = await fetch('/portal/api/domain/remove/', { method: 'POST' });
+                    const data = await res.json();
+
+                    if (data.success) {
+                        setDomainStatus('Custom domain removed', 'success');
+                        domainInput.value = '';
+                        dnsInstructions.classList.add('hidden');
+                        retrySslBtn.classList.add('hidden');
+                        showToast('Domain removed', 'success');
+                        loadDashboard();
+                    } else {
+                        setDomainStatus(data.error || 'Failed to remove domain', 'error');
+                    }
+                } catch (e) {
+                    setDomainStatus('Network error - please try again', 'error');
+                }
+            },
+            'Remove',
+            true
+        );
+    };
+})();
+</script>

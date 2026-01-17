@@ -322,46 +322,46 @@ def portal_verify_custom_domain_api(request):
 @require_POST
 def portal_retry_ssl_api(request):
     """
-    Retry SSL certificate issuance for a domain that failed previously.
-
-    Use when:
-    - Domain was verified but SSL failed (e.g., rate limits)
-    - Rate limits have cleared
+    Retry SSL certificate issuance for a verified domain.
     """
+    from core.services.custom_domain_service import obtain_ssl_certificate
+    from core.nginx_manager import NginxManager
+
     instance = request.portal_customer.instance
 
     if not instance:
         return JsonResponse({"error": "No instance found"}, status=400)
 
     if not instance.custom_domain:
-        return JsonResponse({"error": "No custom domain set"}, status=400)
+        return JsonResponse({"error": "No custom domain configured"}, status=400)
 
     if not instance.custom_domain_verified:
         return JsonResponse(
-            {"error": "Domain not verified yet. Run verification first."}, status=400
+            {"error": "Domain must be verified before SSL can be issued"}, status=400
         )
 
     if instance.custom_domain_ssl:
+        return JsonResponse({"error": "SSL is already active"}, status=400)
+
+    # Attempt SSL issuance
+    ssl_ok = obtain_ssl_certificate(instance.custom_domain)
+
+    if not ssl_ok:
         return JsonResponse(
-            {
-                "success": True,
-                "message": "SSL is already configured",
-            }
+            {"error": "SSL certificate issuance failed. Please try again later."},
+            status=400,
         )
 
-    try:
-        retry_ssl(instance)
+    # Update instance and nginx
+    instance.custom_domain_ssl = True
+    instance.save(update_fields=["custom_domain_ssl"])
 
-        return JsonResponse(
-            {
-                "success": True,
-                "message": "SSL certificate issued successfully",
-            }
-        )
-    except CustomDomainError as e:
-        return JsonResponse({"error": str(e)}, status=400)
-    except Exception as e:
-        return JsonResponse({"error": f"Unexpected error: {str(e)}"}, status=500)
+    nginx = NginxManager()
+    nginx.provision_nginx(instance)
+
+    return JsonResponse(
+        {"success": True, "message": "SSL certificate issued successfully!"}
+    )
 
 
 @csrf_exempt
@@ -412,9 +412,7 @@ def portal_remove_custom_domain_api(request):
 @require_GET
 def portal_domain_status_api(request):
     """
-    Get current custom domain status.
-
-    Useful for checking state without modifying anything.
+    Get current domain status for the instance.
     """
     instance = request.portal_customer.instance
 

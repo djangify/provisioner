@@ -2,50 +2,178 @@
 {% block title %}Dashboard | My Djangify{% endblock %}
 
 {% block content %}
-<h1 class="text-2xl font-semibold mb-6">Dashboard</h1>
+<div class="space-y-8">
 
-<div id="dashboard" class="space-y-6 text-slate-700">
-    Loading…
+    <!-- Page Header -->
+    <div>
+        <h1 class="text-2xl font-semibold text-slate-900">Dashboard</h1>
+        <p class="text-slate-500 mt-1">Manage your store and account settings</p>
+    </div>
+
+    <!-- Instance Overview Card -->
+    <div id="instance-card" class="bg-white border border-slate-200 rounded-lg overflow-hidden">
+        <div class="p-6">
+            <div class="flex items-start justify-between">
+                <div>
+                    <h2 id="site-name" class="text-xl font-semibold text-slate-900">Loading...</h2>
+                    <p class="text-slate-500 mt-1">
+                        <span id="instance-status" class="inline-flex items-center gap-1.5">
+                            <span class="w-2 h-2 rounded-full bg-slate-300"></span>
+                            <span>Loading status...</span>
+                        </span>
+                    </p>
+                </div>
+                <a id="visit-site" href="#" target="_blank" 
+                   class="inline-flex items-center gap-2 px-4 py-2 bg-slate-900 text-white text-sm font-medium rounded hover:bg-slate-800 transition">
+                    <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M13.5 6H5.25A2.25 2.25 0 0 0 3 8.25v10.5A2.25 2.25 0 0 0 5.25 21h10.5A2.25 2.25 0 0 0 18 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25" />
+                    </svg>
+                    Visit Store
+                </a>
+            </div>
+            
+            <!-- Quick Stats -->
+            <div class="mt-6 pt-6 border-t border-slate-100">
+                <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                    <div>
+                        <p class="text-xs font-medium text-slate-500 uppercase tracking-wide">Store URL</p>
+                        <p id="store-url" class="mt-1 text-sm text-slate-900 font-mono">—</p>
+                    </div>
+                    <div>
+                        <p class="text-xs font-medium text-slate-500 uppercase tracking-wide">Custom Domain</p>
+                        <p id="custom-domain-display" class="mt-1 text-sm text-slate-900">Not configured</p>
+                    </div>
+                    <div>
+                        <p class="text-xs font-medium text-slate-500 uppercase tracking-wide">Subscription</p>
+                        <p id="subscription-status" class="mt-1 text-sm text-slate-900">—</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Settings Tabs -->
+    <div class="bg-white border border-slate-200 rounded-lg overflow-hidden">
+        
+        <!-- Tab Navigation -->
+        <div class="border-b border-slate-200">
+            <nav class="flex -mb-px">
+                <button class="tab-btn active" data-tab="domain">
+                    <span class="flex items-center gap-2">
+                        <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M12 21a9.004 9.004 0 0 0 8.716-6.747M12 21a9.004 9.004 0 0 1-8.716-6.747M12 21c2.485 0 4.5-4.03 4.5-9S14.485 3 12 3m0 18c-2.485 0-4.5-4.03-4.5-9S9.515 3 12 3m0 0a8.997 8.997 0 0 1 7.843 4.582M12 3a8.997 8.997 0 0 0-7.843 4.582m15.686 0A11.953 11.953 0 0 1 12 10.5c-2.998 0-5.74-1.1-7.843-2.918m15.686 0A8.959 8.959 0 0 1 21 12c0 .778-.099 1.533-.284 2.253m0 0A17.919 17.919 0 0 1 12 16.5c-3.162 0-6.133-.815-8.716-2.247m0 0A9.015 9.015 0 0 1 3 12c0-1.605.42-3.113 1.157-4.418" />
+                        </svg>
+                        Custom Domain
+                    </span>
+                </button>
+                <button class="tab-btn" data-tab="billing">
+                    <span class="flex items-center gap-2">
+                        <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M2.25 8.25h19.5M2.25 9h19.5m-16.5 5.25h6m-6 2.25h3m-3.75 3h15a2.25 2.25 0 0 0 2.25-2.25V6.75A2.25 2.25 0 0 0 19.5 4.5h-15a2.25 2.25 0 0 0-2.25 2.25v10.5A2.25 2.25 0 0 0 4.5 19.5Z" />
+                        </svg>
+                        Billing
+                    </span>
+                </button>
+                <button class="tab-btn" data-tab="password">
+                    <span class="flex items-center gap-2">
+                        <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 1 0-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 0 0 2.25-2.25v-6.75a2.25 2.25 0 0 0-2.25-2.25H6.75a2.25 2.25 0 0 0-2.25 2.25v6.75a2.25 2.25 0 0 0 2.25 2.25Z" />
+                        </svg>
+                        Password
+                    </span>
+                </button>
+            </nav>
+        </div>
+
+        <!-- Tab Panels -->
+        <div class="p-6">
+
+            <!-- Domain Panel -->
+            <div id="panel-domain" class="tab-panel active">
+                {% include "portal/includes/domain_section.html" %}
+            </div>
+
+            <!-- Billing Panel -->
+            <div id="panel-billing" class="tab-panel">
+                {% include "portal/includes/billing_section.html" %}
+            </div>
+
+            <!-- Password Panel -->
+            <div id="panel-password" class="tab-panel">
+                {% include "portal/includes/password_section.html" %}
+            </div>
+
+        </div>
+    </div>
+
 </div>
+{% endblock %}
 
+{% block extra_js %}
 <script>
-fetch("{% url 'portal:api-dashboard' %}")
-  .then(r => r.json())
-  .then(data => {
-    const el = document.getElementById("dashboard");
+// Tab switching
+document.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+        // Update buttons
+        document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        
+        // Update panels
+        document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+        document.getElementById(`panel-${btn.dataset.tab}`).classList.add('active');
+    });
+});
 
-    if (!data.instance) {
-        el.innerHTML = "<p>No instance found.</p>";
-        return;
+// Load dashboard data
+async function loadDashboard() {
+    try {
+        const res = await fetch("{% url 'portal:api-dashboard' %}");
+        const data = await res.json();
+
+        if (!data.instance) {
+            document.getElementById('site-name').textContent = 'No instance found';
+            return;
+        }
+
+        // Update instance card
+        document.getElementById('site-name').textContent = data.instance.site_name;
+        document.getElementById('visit-site').href = data.instance.url;
+        document.getElementById('store-url').textContent = data.instance.url.replace('https://', '');
+        
+        // Status with color
+        const statusEl = document.getElementById('instance-status');
+        const statusColors = {
+            running: 'bg-green-500',
+            pending: 'bg-yellow-500',
+            stopped: 'bg-red-500',
+            error: 'bg-red-500'
+        };
+        statusEl.innerHTML = `
+            <span class="w-2 h-2 rounded-full ${statusColors[data.instance.status] || 'bg-slate-300'}"></span>
+            <span class="capitalize">${data.instance.status}</span>
+        `;
+
+        // Custom domain
+        const domainDisplay = document.getElementById('custom-domain-display');
+        if (data.instance.custom_domain) {
+            domainDisplay.textContent = data.instance.custom_domain;
+            document.getElementById('domain-input').value = data.instance.custom_domain;
+        }
+
+        // Subscription
+        if (data.subscription) {
+            const subEl = document.getElementById('subscription-status');
+            const end = data.subscription.current_period_end 
+                ? new Date(data.subscription.current_period_end).toLocaleDateString()
+                : '';
+            subEl.innerHTML = `<span class="capitalize">${data.subscription.status}</span>${end ? ` · Renews ${end}` : ''}`;
+        }
+
+    } catch (e) {
+        console.error('Failed to load dashboard:', e);
     }
+}
 
-    el.innerHTML = `
-      <div class="bg-white border rounded-lg p-6">
-        <h2 class="text-lg font-semibold mb-2">${data.instance.site_name}</h2>
-        <p>Status: <strong>${data.instance.status}</strong></p>
-        <p class="mt-2">
-          <a href="${data.instance.url}" target="_blank"
-             class="text-blue-600 underline">
-            Visit site
-          </a>
-        </p>
-      </div>
-
-      <div class="flex gap-4">
-        <a href="{% url 'portal:billing' %}"
-           class="px-4 py-2 bg-slate-900 text-white rounded">
-           Billing
-        </a>
-        <a href="{% url 'portal:domain' %}"
-           class="px-4 py-2 border rounded">
-           Domain
-        </a>
-        <a href="{% url 'portal:password' %}"
-           class="px-4 py-2 border rounded">
-           Change password
-        </a>
-      </div>
-    `;
-  });
+loadDashboard();
 </script>
 {% endblock %}

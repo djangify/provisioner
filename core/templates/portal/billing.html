@@ -2,31 +2,19 @@
 {% block title %}Billing | My Djangify{% endblock %}
 
 {% block content %}
-<h1 class="text-2xl font-semibold mb-6">Billing</h1>
+<div class="space-y-6">
+    
+    <!-- Back link -->
+    <a href="{% url 'portal:dashboard' %}" class="inline-flex items-center gap-1 text-sm text-slate-500 hover:text-slate-900 transition">
+        <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18" />
+        </svg>
+        Back to Dashboard
+    </a>
 
-<button id="manage"
-        class="bg-slate-900 text-white px-4 py-2 rounded">
-    Manage billing in Stripe
-</button>
+    <div class="bg-white border border-slate-200 rounded-lg p-6">
+        {% include "portal/includes/billing_section.html" %}
+    </div>
 
-<button id="cancel"
-        class="ml-4 border border-red-600 text-red-600 px-4 py-2 rounded">
-    Cancel subscription
-</button>
-
-<script>
-document.getElementById("manage").onclick = () => {
-  fetch("{% url 'portal:api-billing' %}")
-    .then(r => r.json())
-    .then(d => window.location = d.url);
-};
-
-document.getElementById("cancel").onclick = () => {
-  if (!confirm("Cancel at period end?")) return;
-
-  fetch("{% url 'portal:api-cancel' %}", {method: "POST"})
-    .then(r => r.json())
-    .then(d => alert(d.message || "Cancelled"));
-};
-</script>
+</div>
 {% endblock %}
